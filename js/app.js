@@ -738,7 +738,7 @@
   function renderUsers() {
     const box = $('#usersPanel'); if (!box) return;
     const ed = U.edit;
-    box.innerHTML = `<h2>人員與權限 <small>名單內的 Gmail 才能登入；沒勾任何權限＝只能看（適合投影用的電腦）</small></h2>
+    box.innerHTML = `<h2>人員與權限 <small>名單內的 Gmail 才能登入；沒勾任何權限＝只能看。投影用的電腦要能在畫面上按「完成」，請勾「生產部處理」</small></h2>
       <form id="userForm" class="user-form" novalidate>
         <label class="field"><span>Gmail</span><input id="ufEmail" type="email" maxlength="120" ${ed ? 'readonly' : ''} value="${esc(ed ? ed.email : '')}" placeholder="name@gmail.com"></label>
         <label class="field"><span>名字（顯示用）</span><input id="ufName" maxlength="30" value="${esc(ed ? ed.name : '')}" placeholder="例：採購 林雅婷"></label>
@@ -989,7 +989,9 @@
   }
 
   // ================= 投影模式 =================
-  const proj = { on: false, page: 0, pages: 2, list: [], week: {}, rotT: null, clockT: null, queue: [], cur: null, popT: null, wake: null, idleT: null };
+  const proj = { on: false, page: 0, pages: 2, list: [], week: {}, rotT: null, clockT: null, queue: [], cur: null, popT: null, wake: null, idleT: null, armed: null, armT: null };
+  const ARM_MS = 6000;   // 投影「完成」按第一次後，6 秒內再按一次才算
+  const isArmed = id => !!proj.armed && proj.armed.id === id && Date.now() < proj.armed.until;
   function projEnter() {
     if (proj.on) { projRender(); return; }
     proj.on = true;
@@ -1130,7 +1132,12 @@
       ${n.body ? `<div class="bd">${esc(n.body)}</div>` : ''}
       ${meta ? `<div class="meta">${meta}</div>` : ''}
       ${n.reply ? `<div class="rp">生產部回覆：${esc(n.reply)}</div>` : ''}
-      ${di ? `<div class="due ${di.cls}">${esc(di.text)}<small>${esc(dueRange(n))}</small></div>` : '<div class="due"><small>未訂日期</small></div>'}
+      <div class="p-foot">
+        ${di ? `<div class="due ${di.cls}">${esc(di.text)}<small>${esc(dueRange(n))}</small></div>` : '<div class="due"><small>未訂日期</small></div>'}
+        ${canHandle() ? (isArmed(n.id)
+          ? `<button type="button" class="p-done armed" data-act="p-done" data-id="${esc(n.id)}">再按一次確認完成</button>`
+          : `<button type="button" class="p-done" data-act="p-done" data-id="${esc(n.id)}">✓ 完成</button>`) : ''}
+      </div>
     </article>`;
   }
   function projSchedule() {
@@ -1256,6 +1263,23 @@
         break;
       case 'p-sound': setPrefs({ sound: !prefs().sound }); unlockAudio(); updateSoundHint(); break;
       case 'p-test': unlockAudio(); setTimeout(() => notify({ key: 'test:' + Date.now(), kind: 'test', dept: 'store', urgent: false, kicker: '測試通知', title: '各部門發布新通知時，會像這樣跳出來', lines: ['同時會響提示音；緊急通知會閃紅框、停留時間加倍', '點一下畫面就能關閉'] }), 60); break;
+      case 'p-done': {
+        // 投影畫面標示完成：按兩次才算（避免誤觸），第一次按時暫停翻頁
+        const n = S.get('notices', id);
+        if (!n || !canHandle()) break;
+        if (!isArmed(id)) {
+          proj.armed = { id, until: Date.now() + ARM_MS };
+          projSchedule();       // 重新計時，確認前不會翻頁
+          projCenter();
+          clearTimeout(proj.armT);
+          proj.armT = setTimeout(() => { proj.armed = null; if (proj.on) projCenter(); }, ARM_MS);
+          break;
+        }
+        proj.armed = null; clearTimeout(proj.armT);
+        setNoticeStatus(n, 'done');
+        toast(`已標示完成：${n.title}（要改回可到看板總覽）`);
+        break;
+      }
       case 'p-exit': projExit(false); break;
       case 'p-pop-close': projNext(); break;
       case 'p-enable-sound': unlockAudio(); break;
