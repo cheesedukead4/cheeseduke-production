@@ -46,7 +46,6 @@
   const WEEK = ['日', '一', '二', '三', '四', '五', '六'];
   const DEFAULT_SET = { rotateSec: 12, popupSec: 25, doneDays: 3, types: {} };
   const NEW_POPUP_HOURS = 12;   // 超過這個時間才收到的新通知（例如電腦關機一整天）不再跳出，只在看板標示「待確認」
-  const PER_PAGE = 4;           // 投影「重點通知」每頁幾張
 
   // ================= 小工具 =================
   const $ = (s, r = document) => r.querySelector(s);
@@ -988,13 +987,13 @@
     const di = dueInfo(n);
     if (n.src === 'pb') {
       return {
-        key: `n:${n.id}:0`, kind: 'notice', id: n.id, dept: n.dept, urgent: false, kicker: '新交辦任務', title: n.title,
+        key: `n:${n.id}:0`, kind: 'notice', id: n.id, dept: n.dept, urgent: false, kicker: '新交辦任務', title: n.title, body: n.body || '',
         lines: [n.owner ? `負責：${n.owner}` : '', di ? `預交日：${mdw(n.due)}　${di.text}` : '', '來自夥伴交接看板'].filter(Boolean)
       };
     }
     return {
       key: `n:${n.id}:${n.rev || 0}`, kind: 'notice', id: n.id, dept: n.dept, urgent: n.priority === 'urgent',
-      kicker: update ? '通知更新' : (n.priority === 'urgent' ? '緊急通知' : '新通知'), title: n.title,
+      kicker: update ? '通知更新' : (n.priority === 'urgent' ? '緊急通知' : '新通知'), title: n.title, body: n.body || '',
       lines: [
         [n.type, n.items, n.qty].filter(Boolean).join('　'),
         di ? `需處理：${dueRange(n)}　${di.text}` : '',
@@ -1101,7 +1100,7 @@
   }
 
   // ================= 投影模式 =================
-  const proj = { on: false, page: 0, pages: 2, list: [], week: {}, rotT: null, clockT: null, queue: [], cur: null, popT: null, wake: null, idleT: null, armed: null, armT: null };
+  const proj = { on: false, page: 0, pages: 2, list: [], week: {}, rotT: null, clockT: null, queue: [], cur: null, popT: null, wake: null, idleT: null, armed: null, armT: null, zoom: null, zoomT: null, curDur: 0, pageSig: '', pageList: [] };
   const ARM_MS = 6000;   // 投影「完成」按第一次後，6 秒內再按一次才算
   const isArmed = id => !!proj.armed && proj.armed.id === id && Date.now() < proj.armed.until;
   function projEnter() {
@@ -1131,6 +1130,7 @@
         <button type="button" data-act="p-exit">離開投影</button>
       </div>
       <button type="button" class="p-hint" id="pHint" data-act="p-enable-sound" hidden>點一下畫面，開啟提示音</button>
+      <div class="p-zoom" id="pZoom" data-act="p-zoom-close" hidden></div>
       <div class="p-pop" id="pPop" data-act="p-pop-close" hidden></div>`;
     proj.page = 0;
     projRender();
@@ -1144,8 +1144,8 @@
   }
   function projExit(fromRoute) {
     proj.on = false;
-    clearInterval(proj.clockT); clearTimeout(proj.rotT); clearTimeout(proj.popT); clearTimeout(proj.idleT);
-    proj.queue = []; proj.cur = null;
+    clearInterval(proj.clockT); clearTimeout(proj.rotT); clearTimeout(proj.popT); clearTimeout(proj.idleT); clearTimeout(proj.zoomT);
+    proj.queue = []; proj.cur = null; proj.zoom = null; proj.pageSig = '';
     const el = $('#proj'); el.hidden = true; el.innerHTML = ''; el.classList.remove('idle');
     document.documentElement.classList.remove('proj-on');
     releaseWake();
@@ -1163,6 +1163,15 @@
     const map = entriesBetween(t, addDays(t, 6), { proj: true, depts });
     $('#pToday').innerHTML = projDayList(map[t] || [], true);
     $('#pTomorrow').innerHTML = projDayList(map[tm] || [], false);
+    // 左欄放不下：先收明日，再收今日已結束的，最後收今日較晚的（文字一律完整顯示，不截斷）
+    const lcol = $('#pToday').parentElement;
+    let hm = 0, ht = 0;
+    for (let guard = 0; guard < 80 && overflowing(lcol); guard++) {
+      const tmEv = $$('#pTomorrow .p-ev'), tdEv = $$('#pToday .p-ev');
+      if (tmEv.length) { tmEv[tmEv.length - 1].remove(); setMore($('#pTomorrow'), `還有 ${++hm} 個行程`, { kind: 'day', day: tm }); }
+      else if (tdEv.length > 1) { const past = tdEv.filter(e => e.classList.contains('past')); (past[0] || tdEv[tdEv.length - 1]).remove(); setMore($('#pToday'), `還有 ${++ht} 個行程`, { kind: 'day', day: t }); }
+      else break;
+    }
     // 7 天內到期（含逾期）
     const dueList = open.filter(n => n.due && n.onCal !== false && bucket(n) <= 2);
     const groups = [];
@@ -1173,16 +1182,20 @@
       g.items.push(n);
     });
     groups.sort((a, b) => (a.key === 'over' ? '0' : a.key).localeCompare(b.key === 'over' ? '0' : b.key));
-    let shown = 0;
-    $('#pDue').innerHTML = groups.length ? groups.map(g => {
-      if (shown >= 9) return '';
-      const items = g.items.slice(0, 9 - shown); shown += items.length;
-      return `<div class="p-due-day"><div class="h ${g.cls}">${esc(g.label)}<span>${g.items.length} 項</span></div>${items.map(n => `<div class="p-dn ${n.priority === 'urgent' ? 'urgent' : ''}">${dtag(n.dept)}<span class="x">${esc(n.title)}</span></div>`).join('')}</div>`;
-    }).join('') + (dueList.length > shown ? `<div class="p-empty">還有 ${dueList.length - shown} 項，請看看板</div>` : '') : '<div class="p-empty">接下來 7 天沒有到期的事項</div>';
+    $('#pDue').innerHTML = groups.length ? groups.map(g => `<div class="p-due-day"><div class="h ${g.cls}">${esc(g.label)}<span>${g.items.length} 項</span></div>${g.items.map(n =>
+      `<div class="p-dn ${n.priority === 'urgent' ? 'urgent' : ''}" data-act="p-zoom" data-kind="notice" data-id="${esc(n.id)}">${dtag(n.dept)}<span class="x">${esc(n.title)}</span></div>`).join('')}</div>`).join('')
+      : '<div class="p-empty">接下來 7 天沒有到期的事項</div>';
+    const rcol = $('#pDue').parentElement;
+    let hd = 0;
+    for (let guard = 0; guard < 300 && overflowing(rcol); guard++) {
+      const items = $$('#pDue .p-dn'); if (items.length <= 1) break;
+      const it = items[items.length - 1], g = it.closest('.p-due-day');
+      it.remove();
+      if (g && !g.querySelector('.p-dn')) g.remove();
+      setMore($('#pDue'), `還有 ${++hd} 項，請看看板`);
+    }
     // 輪播頁
     proj.list = open; proj.week = map;
-    proj.pages = Math.max(1, Math.ceil(open.length / PER_PAGE)) + 1;
-    if (proj.page >= proj.pages) proj.page = 0;
     projCenter();
     // 跑馬燈：最新發布的在前
     const tk = open.slice().sort((a, b) => (b.at || 0) - (a.at || 0)).slice(0, 20);
@@ -1192,12 +1205,21 @@
       run.dataset.sig = html; run.innerHTML = html + html;
       requestAnimationFrame(() => { run.style.animationDuration = Math.max(25, run.scrollWidth / 2 / 70) + 's'; });
     }
+    if (proj.zoom) projZoomRender();
     renderSync();
   }
+  const overflowing = el => el.scrollHeight > el.clientHeight + 1;
+  // 放不下的項目收起來後，在清單最後顯示「還有 N 項」（可以點開看全部）
+  function setMore(list, text, zoom) {
+    let m = list.querySelector(':scope > .p-more');
+    if (!m) { m = document.createElement('div'); m.className = 'p-empty p-more'; list.appendChild(m); }
+    m.textContent = text;
+    if (zoom) { m.dataset.act = 'p-zoom'; m.dataset.kind = zoom.kind; m.dataset.day = zoom.day; }
+  }
   function projDayList(list, isToday) {
-    const evs = list.filter(x => x.kind === 'event'), max = isToday ? 6 : 3, now = Date.now();
+    const evs = list.filter(x => x.kind === 'event'), now = Date.now();
     if (!evs.length) return `<div class="p-empty">${isToday ? '今天' : '明天'}沒有排定的行程</div>`;
-    return evs.slice(0, max).map(x => {
+    return evs.map(x => {
       const ev = x.ev, timed = !ev.allDay && ev.time && x.first;
       let cls = '';
       if (isToday && timed) {
@@ -1205,31 +1227,90 @@
         cls = now >= e ? 'past' : now >= s ? 'now' : '';
       }
       const small = cls === 'now' ? '進行中' : timed && ev.endTime ? '到 ' + ev.endTime : '';
-      return `<div class="p-ev ${deptCls(ev.dept)} ${cls}"><div class="tm">${esc(evTimeLabel(x))}${small ? `<small>${esc(small)}</small>` : ''}</div>
+      return `<div class="p-ev ${deptCls(ev.dept)} ${cls}" data-act="p-zoom" data-kind="event" data-id="${esc(ev.id)}" data-day="${x.day}"><div class="tm">${esc(evTimeLabel(x))}${small ? `<small>${esc(small)}</small>` : ''}</div>
         <div><div class="ti">${esc(ev.title)}</div><div class="sb">${ev.dept ? dtag(ev.dept) : `<span>${esc(ETYPE[ev.etype] || '')}</span>`}${ev.place ? `<span>${esc(ev.place)}</span>` : ''}</div></div></div>`;
-    }).join('') + (evs.length > max ? `<div class="p-empty">還有 ${evs.length - max} 個行程</div>` : '');
+    }).join('');
+  }
+
+  // 重點通知卡片一律顯示全文：先縮小字，再減少每頁張數（4 → 2 → 1），單張還放不下就慢慢上下捲動。
+  // 每種排法最多縮到多小（投影要遠看，張數多時不縮太小）
+  const MIN_K = { 4: 0.86, 2: 0.8, 1: 0.72 };
+  const projNarrow = () => window.matchMedia('(max-width: 1000px)').matches;   // 窄螢幕：卡片一欄、高度跟著內容，不用量
+  function fitCard(c, minK) {
+    const vp = c.querySelector('.p-viewport'); if (!vp) return true;
+    for (let k = 1; k >= minK - 0.001; k = Math.round((k - 0.04) * 100) / 100) {
+      c.style.setProperty('--k', String(k));
+      if (vp.scrollHeight <= vp.clientHeight + 1) return true;
+    }
+    return false;
+  }
+  const cardsHtml = (items, n) => `<div class="p-cards n${n}">${items.map(projCard).join('')}</div>`;
+  function projPages() {
+    const box = $('#pCenter'), list = proj.list;
+    if (!box || !list.length) return [];
+    const w = box.clientWidth, h = box.clientHeight;
+    if (!w || !h || projNarrow()) { const out = []; for (let i = 0; i < list.length; i += 4) out.push({ items: list.slice(i, i + 4), n: 4 }); return out; }
+    const sig = `${w}x${h}|${canHandle()}|` + list.map(n => [n.id, n.title, n.body, n.items, n.qty, n.owner, n.reply, n.status, n.priority, n.due, n.dueEnd, n.type].join('\u0001')).join('\u0002');
+    if (proj.pageSig === sig) return proj.pageList;
+    const meas = document.createElement('div');
+    meas.className = 'p-center';
+    meas.setAttribute('aria-hidden', 'true');
+    meas.style.cssText = `position:absolute;left:-20000px;top:0;visibility:hidden;width:${w}px;height:${h}px`;
+    $('#proj').appendChild(meas);
+    const fits = (items, n) => { meas.innerHTML = cardsHtml(items, n); return $$('.p-card', meas).every(c => fitCard(c, MIN_K[n])); };
+    const pages = [];
+    for (let i = 0; i < list.length;) {
+      const four = list.slice(i, i + 4), two = list.slice(i, i + 2);
+      if (four.length >= 3 && fits(four, 4)) { pages.push({ items: four, n: 4 }); i += four.length; }
+      else if (two.length === 2 && fits(two, 2)) { pages.push({ items: two, n: 2 }); i += 2; }
+      else { pages.push({ items: [list[i]], n: 1 }); i += 1; }
+    }
+    meas.remove();
+    proj.pageSig = sig; proj.pageList = pages;
+    return pages;
   }
   function projCenter() {
     const box = $('#pCenter'); if (!box) return;
+    const pages = projPages();
+    proj.pages = Math.max(1, pages.length) + 1;
+    if (proj.page >= proj.pages) proj.page = 0;
     const pg = proj.page, last = proj.pages - 1;
+    proj.curDur = 0;
     $('#pPager').innerHTML = Array.from({ length: proj.pages }, (_, i) => `<i class="${i === pg ? 'on' : ''}"></i>`).join('');
     if (pg < last) {
-      const items = proj.list.slice(pg * PER_PAGE, pg * PER_PAGE + PER_PAGE);
-      $('#pCTitle').textContent = proj.list.length > PER_PAGE ? `重點通知 ${pg + 1}／${last}` : '重點通知';
-      box.innerHTML = items.length
-        ? `<div class="p-cards ${items.length === 1 ? 'n1' : ''}">${items.map(projCard).join('')}</div>`
-        : '<div class="p-allclear"><div><b>目前沒有待處理的通知</b>各部門發布新通知時，會立刻跳出來</div></div>';
+      const page = pages[pg];
+      $('#pCTitle').textContent = pages.length > 1 ? `重點通知 ${pg + 1}／${pages.length}` : '重點通知';
+      if (!page) { box.innerHTML = '<div class="p-allclear"><div><b>目前沒有待處理的通知</b>各部門發布新通知時，會立刻跳出來</div></div>'; return; }
+      box.innerHTML = cardsHtml(page.items, page.n);
+      if (!projNarrow()) $$('.p-card', box).forEach(c => {
+        if (fitCard(c, page.n === 1 ? MIN_K[1] : Math.min(MIN_K[page.n], MIN_K[1]))) return;
+        const vp = c.querySelector('.p-viewport'), sc = c.querySelector('.p-scroll');
+        const dist = vp.clientHeight - sc.scrollHeight;
+        if (dist >= 0) return;
+        const dur = Math.max(8, Math.round(-dist / 20));
+        c.classList.add('scroll');
+        c.style.setProperty('--dist', dist + 'px');
+        c.style.setProperty('--dur', dur + 's');
+        proj.curDur = Math.max(proj.curDur, dur + 2);   // 這一頁停留到內容捲完一次
+      });
     } else {
       const t = today();
       $('#pCTitle').textContent = '本週行事曆';
       box.innerHTML = `<div class="p-week">${Array.from({ length: 7 }, (_, i) => {
         const d = addDays(t, i), list = proj.week[d] || [];
-        return `<div class="p-wd ${i === 0 ? 'today' : ''}"><div class="h"><b>${esc(md(d))}</b><span>${i === 0 ? '今天' : '週' + wk(d)}</span></div>
-          ${list.slice(0, 7).map(x => x.kind === 'event'
-            ? `<div class="p-we ${deptCls(x.ev.dept)}">${!x.ev.allDay && x.ev.time && x.first ? `<span class="t">${esc(x.ev.time)}</span>` : ''}${esc(x.ev.title)}</div>`
-            : `<div class="p-we nt ${deptCls(x.n.dept)} ${x.n.priority === 'urgent' ? 'urgent' : ''}">${esc(deptName(x.n.dept))}｜${esc(x.n.title)}</div>`).join('')}
-          ${list.length > 7 ? `<div class="p-empty">還有 ${list.length - 7} 筆</div>` : ''}</div>`;
+        return `<div class="p-wd ${i === 0 ? 'today' : ''}" data-day="${d}"><div class="h" data-act="p-zoom" data-kind="day" data-day="${d}"><b>${esc(md(d))}</b><span>${i === 0 ? '今天' : '週' + wk(d)}</span></div>
+          ${list.map(x => x.kind === 'event'
+            ? `<div class="p-we ${deptCls(x.ev.dept)}" data-act="p-zoom" data-kind="event" data-id="${esc(x.ev.id)}" data-day="${d}">${!x.ev.allDay && x.ev.time && x.first ? `<span class="t">${esc(x.ev.time)}</span>` : ''}${esc(x.ev.title)}</div>`
+            : `<div class="p-we nt ${deptCls(x.n.dept)} ${x.n.priority === 'urgent' ? 'urgent' : ''}" data-act="p-zoom" data-kind="notice" data-id="${esc(x.n.id)}">${esc(deptName(x.n.dept))}｜${esc(x.n.title)}</div>`).join('')}</div>`;
       }).join('')}</div>`;
+      $$('.p-wd', box).forEach(wd => {
+        let hid = 0;
+        for (let guard = 0; guard < 60 && overflowing(wd); guard++) {
+          const es = $$('.p-we', wd); if (!es.length) break;
+          es[es.length - 1].remove();
+          setMore(wd, `還有 ${++hid} 筆，點一下看`, { kind: 'day', day: wd.dataset.day });
+        }
+      });
     }
   }
   function projCard(n) {
@@ -1237,28 +1318,89 @@
     const tags = (n.priority === 'urgent' ? '<span class="p-pill urgent">緊急</span>' : n.priority === 'high' ? '<span class="p-pill high">重要</span>' : '') +
       (n.status === 'new' ? '<span class="p-pill new">待確認</span>' : `<span class="p-pill">${STATUS[n.status] || ''}</span>`);
     const meta = [n.items ? `<span>品項 <b>${esc(n.items)}</b></span>` : '', n.qty ? `<span>數量 <b>${esc(n.qty)}</b></span>` : '', n.owner ? `<span>負責 <b>${esc(n.owner)}</b></span>` : ''].join('');
-    return `<article class="p-card ${deptCls(n.dept)} ${n.priority === 'urgent' ? 'urgent' : ''}">
+    return `<article class="p-card ${deptCls(n.dept)} ${n.priority === 'urgent' ? 'urgent' : ''}" data-act="p-zoom" data-kind="notice" data-id="${esc(n.id)}">
       <div class="top">${dtag(n.dept)}<span class="ty">${esc(n.type || '')}</span><span class="tg">${tags}</span></div>
-      <div class="ti">${esc(n.title)}</div>
-      ${n.body ? `<div class="bd">${esc(n.body)}</div>` : ''}
-      ${meta ? `<div class="meta">${meta}</div>` : ''}
-      ${n.reply ? `<div class="rp">生產部回覆：${esc(n.reply)}</div>` : ''}
+      <div class="p-viewport"><div class="p-scroll">
+        <div class="ti">${esc(n.title)}</div>
+        ${n.body ? `<div class="bd">${esc(n.body)}</div>` : ''}
+        ${meta ? `<div class="meta">${meta}</div>` : ''}
+        ${n.reply ? `<div class="rp">${n.src === 'pb' ? '生產部備註' : '生產部回覆'}：${esc(n.reply)}</div>` : ''}
+      </div></div>
       <div class="p-foot">
         ${di ? `<div class="due ${di.cls}">${esc(di.text)}<small>${esc(dueRange(n))}</small></div>` : '<div class="due"><small>未訂日期</small></div>'}
-        ${canHandle() ? (isArmed(n.id)
-          ? `<button type="button" class="p-done armed" data-act="p-done" data-id="${esc(n.id)}">再按一次確認完成</button>`
-          : `<button type="button" class="p-done" data-act="p-done" data-id="${esc(n.id)}">✓ 完成</button>`) : ''}
+        ${projDoneBtn(n)}
       </div>
     </article>`;
   }
+  const projDoneBtn = n => !canHandle() || n.status === 'done' ? '' : isArmed(n.id)
+    ? `<button type="button" class="p-done armed" data-act="p-done" data-id="${esc(n.id)}">再按一次確認完成</button>`
+    : `<button type="button" class="p-done" data-act="p-done" data-id="${esc(n.id)}">✓ 完成</button>`;
+
+  // 投影上點一下任何一項：放大顯示完整內容（點外面或「關閉」收起來，90 秒沒動作自動收起）
+  function projZoom(kind, id, day) {
+    proj.zoom = { kind, id, day };
+    projZoomRender();
+    clearTimeout(proj.zoomT);
+    proj.zoomT = setTimeout(() => { projZoomClose(); projSchedule(); }, 90000);
+    projSchedule();
+  }
+  function projZoomClose() {
+    proj.zoom = null; clearTimeout(proj.zoomT);
+    const b = $('#pZoom'); if (b) { b.hidden = true; b.innerHTML = ''; }
+  }
+  function projZoomRender() {
+    const z = proj.zoom, box = $('#pZoom');
+    if (!z || !box) return;
+    const kv = rows => `<dl class="p-zoom-kv">${rows.filter(r => r[1]).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>`;
+    let head = '', body = '', foot = '', cls = 'd-none';
+    if (z.kind === 'notice') {
+      const n = getNotice(z.id);
+      if (!n) { projZoomClose(); return; }
+      const di = dueInfo(n), pb = n.src === 'pb';
+      cls = deptCls(n.dept) + (n.priority === 'urgent' && n.status !== 'done' ? ' urgent' : '');
+      head = `${dtag(n.dept)}<span class="ty">${esc(n.type || '')}</span><span class="tg">${n.priority === 'urgent' ? '<span class="p-pill urgent">緊急</span>' : n.priority === 'high' ? '<span class="p-pill high">重要</span>' : ''}${n.status === 'new' ? '<span class="p-pill new">待確認</span>' : `<span class="p-pill">${STATUS[n.status] || ''}</span>`}</span>`;
+      body = `<div class="p-zoom-t">${esc(n.title)}</div>${n.body ? `<div class="p-zoom-b">${esc(n.body)}</div>` : ''}` + kv([
+        [pb ? '預交日' : '需處理', n.due ? dueRange(n) + (di && di.text ? '　' + di.text : '') : '未訂'],
+        ['品項', n.items], ['數量', n.qty], [pb ? '負責人' : '生產部負責', n.owner], [pb ? '生產部備註' : '生產部回覆', n.reply]
+      ].concat(pb
+        ? [['提案人備註', n.pb.proposerNote], ['夥伴回饋', n.pb.feedback], ['附件', n.pb.attachments ? `${n.pb.attachments} 張（請到夥伴交接看板查看）` : ''], ['來源', '夥伴交接看板']]
+        : [['發布', n.by ? `${n.by}　${stamp(n.at)}` : '']]));
+      foot = projDoneBtn(n);
+    } else if (z.kind === 'event') {
+      const e = S.get('events', z.id);
+      if (!e) { projZoomClose(); return; }
+      cls = deptCls(e.dept);
+      head = `${e.dept ? dtag(e.dept) : '<span class="dtag d-none">生產部</span>'}<span class="ty">行程・${esc(ETYPE[e.etype] || '')}</span>`;
+      body = `<div class="p-zoom-t">${esc(e.title)}</div>` + kv([['時間', eventWhen(e, z.day)], ['重複', e.repeat && e.repeat !== 'none' ? REPEAT[e.repeat] : ''], ['地點', e.place], ['說明', e.note]]);
+    } else {
+      const list = proj.week[z.day] || entriesBetween(z.day, z.day, { proj: true })[z.day] || [];
+      head = `<span class="ty">${z.day === today() ? '今天' : '行事曆'}</span>`;
+      body = `<div class="p-zoom-t">${esc(mdw(z.day))}　共 ${list.length} 筆</div>` + (list.length ? list.map(x => x.kind === 'event'
+        ? `<div class="p-zoom-item ${deptCls(x.ev.dept)}" data-act="p-zoom" data-kind="event" data-id="${esc(x.ev.id)}" data-day="${z.day}"><span class="t">${esc(evTimeLabel(x))}</span>${x.ev.dept ? dtag(x.ev.dept) : ''}<span class="x">${esc(x.ev.title)}</span></div>`
+        : `<div class="p-zoom-item nt ${deptCls(x.n.dept)}" data-act="p-zoom" data-kind="notice" data-id="${esc(x.n.id)}"><span class="t">到期</span>${dtag(x.n.dept)}<span class="x">${esc(x.n.title)}</span></div>`).join('')
+        : '<div class="p-empty">這天沒有行程或到期的事項</div>');
+    }
+    box.innerHTML = `<div class="p-zoom-box ${cls}" data-act="p-noop" role="dialog" aria-modal="true">
+        <div class="p-zoom-k">${head}</div>
+        <div class="p-zoom-body">${body}</div>
+        <div class="p-zoom-f">${foot}<button type="button" class="p-zoom-x" data-act="p-zoom-close">關閉</button></div>
+      </div>`;
+    box.hidden = false;
+    // 字很多：先縮小到 60%，還是放不下就讓內容區上下捲動（滑鼠滾輪或手指滑）
+    const zb = box.firstElementChild, zbody = zb.querySelector('.p-zoom-body');
+    for (let k = 1; k >= 0.6 - 0.001; k = Math.round((k - 0.05) * 100) / 100) {
+      zb.style.setProperty('--k', String(k));
+      if (zbody.scrollHeight <= zbody.clientHeight + 1) break;
+    }
+  }
   function projSchedule() {
     clearTimeout(proj.rotT);
-    const sec = Math.max(5, Number(settings().rotateSec) || 12);
+    const sec = Math.max(5, Number(settings().rotateSec) || 12, proj.curDur || 0);
     const bar = $('#pProg');
     if (bar) { bar.classList.remove('run'); void bar.offsetWidth; bar.style.animationDuration = sec + 's'; bar.classList.add('run'); }
     proj.rotT = setTimeout(() => {
       if (!proj.on) return;
-      if (!proj.cur) { proj.page = (proj.page + 1) % proj.pages; projCenter(); }   // 有通知跳出時先不翻頁
+      if (!proj.cur && !proj.zoom) { proj.page = (proj.page + 1) % proj.pages; projCenter(); }   // 有通知跳出或放大檢視時先不翻頁
       projSchedule();
     }, sec * 1000);
   }
@@ -1280,10 +1422,13 @@
     pop.innerHTML = `<div class="p-pop-box ${al.urgent ? 'urgent' : ''}" role="alert">
         <div class="p-pop-k"><span>${esc(al.kicker)}</span>${al.dept ? dtag(al.dept) : ''}<span class="cnt"></span></div>
         <div class="p-pop-t">${esc(al.title)}</div>
+        ${al.body ? `<div class="p-pop-b">${esc(al.body)}</div>` : ''}
         <div class="p-pop-l">${al.lines.map(l => `<span>${esc(l)}</span>`).join('')}</div>
         <div class="p-pop-f"><span>點一下關閉</span><span class="bar"><i style="animation-duration:${sec}s"></i></span></div>
       </div>`;
     pop.hidden = false;
+    const pb = pop.firstElementChild;
+    for (let k = 1; k >= 0.5 - 0.001; k = Math.round((k - 0.05) * 100) / 100) { pb.style.setProperty('--k', String(k)); if (pb.scrollHeight <= pop.clientHeight * 0.92) break; }
     projPopCount();
     proj.popT = setTimeout(projNext, sec * 1000);
   }
@@ -1385,15 +1530,20 @@
           proj.armed = { id, until: Date.now() + ARM_MS };
           projSchedule();       // 重新計時，確認前不會翻頁
           projCenter();
+          if (proj.zoom) projZoomRender();
           clearTimeout(proj.armT);
-          proj.armT = setTimeout(() => { proj.armed = null; if (proj.on) projCenter(); }, ARM_MS);
+          proj.armT = setTimeout(() => { proj.armed = null; if (proj.on) { projCenter(); if (proj.zoom) projZoomRender(); } }, ARM_MS);
           break;
         }
         proj.armed = null; clearTimeout(proj.armT);
+        if (proj.zoom) projZoomClose();
         setNoticeStatus(n, 'done');
         if (n.src !== 'pb') toast(`已標示完成：${n.title}（要改回可到看板總覽）`);
         break;
       }
+      case 'p-zoom': projZoom(el.dataset.kind, el.dataset.id, el.dataset.day); break;
+      case 'p-zoom-close': projZoomClose(); projSchedule(); break;
+      case 'p-noop': break;
       case 'p-exit': projExit(false); break;
       case 'p-pop-close': projNext(); break;
       case 'p-enable-sound': unlockAudio(); break;
@@ -1419,6 +1569,7 @@
       if (ev.key === 'Escape') {
         if (!$('#modal').hidden) closeModal();
         else if (drawerRef) closeDrawer();
+        else if (proj.on && proj.zoom) { projZoomClose(); projSchedule(); }
         else if (proj.on && proj.cur) projNext();
         return;
       }
@@ -1428,6 +1579,7 @@
     document.addEventListener('pointerdown', unlockAudio, true);
     document.addEventListener('keydown', unlockAudio, true);
     $('#proj').addEventListener('mousemove', projActive);
+    window.addEventListener('resize', () => { if (proj.on) { clearTimeout(proj.rzT); proj.rzT = setTimeout(projRender, 250); } });
     $('#proj').addEventListener('pointerdown', projActive);
     $('#importFile').addEventListener('change', e => { const f = e.target.files[0]; if (f) importJson(f); e.target.value = ''; });
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { requestWake(); checkReminders(); } });
