@@ -5,6 +5,8 @@
  *      settings        看板設定（一筆，id = main）：投影輪播秒數、各部門通知類別…
  *      notices_YYYYMM  各部門給生產部的通知，依「發布日期」（date）的年月分檔
  *      events_YYYYMM   行事曆行程，依「開始日期」（date）的年月分檔
+ *      pbtasks         從夥伴交接看板帶進來、指派給生產部的任務（雲端後端定時寫入，網頁只讀）
+ *      pbstate         生產部對交辦任務的處理紀錄（確認、回覆、要完成或取消）
  *    （分檔是為了避免單一檔案越來越大、每次修改都要上傳全部歷史）
  *  - 每類有雲端版本號；上傳時帶「我是根據哪一版改的」，有人搶先更新就先下載，以單筆（id）為單位三方合併後再上傳
  *  - 同一筆的同一個欄位被兩個人改成不同值時，以這台裝置的修改為準，並通知畫面提示
@@ -18,9 +20,9 @@
   var STORE = 'kv';
   var POLL_MS = 30000;
   var PUSH_DELAY_MS = 800;
-  var LABELS = { settings: '看板設定', notices: '各部門通知', events: '行事曆' };
+  var LABELS = { settings: '看板設定', notices: '各部門通知', events: '行事曆', pbtasks: '夥伴交接任務', pbstate: '交辦任務處理紀錄' };
   var MONTHLY = ['notices', 'events'];   // 依日期年月分檔的種類（資料要有 date 欄位）
-  var KEY_RE = /^(settings|(notices|events)_\d{6})$/;
+  var KEY_RE = /^(settings|pbtasks|pbstate|(notices|events)_\d{6})$/;
 
   var parts = Object.create(null);   // 類別 -> JSON 字串（目前本機值，陣列）
   var bases = Object.create(null);   // 類別 -> 上次與雲端一致時的 JSON 字串（僅本機有未上傳修改時保存）

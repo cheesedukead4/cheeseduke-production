@@ -33,7 +33,9 @@
     { id: 'channel', name: '通路', types: ['通路訂單', '檔期活動', '新品上架', '規格／標示要求', '退貨'] },
     { id: 'meeting', name: '產銷會議', types: ['會議決議', '待辦追蹤', '排程調整', '新品開發'] }
   ];
-  const DEPT = Object.fromEntries(DEPTS.map(d => [d.id, d]));
+  // 從夥伴交接看板帶進來、指派給生產部夥伴的任務（雲端後端每 5 分鐘同步；只能在這裡處理與標示完成，不能發布）
+  const HANDOVER = { id: 'handover', name: '夥伴交接', types: [] };
+  const DEPT = Object.fromEntries(DEPTS.concat([HANDOVER]).map(d => [d.id, d]));
   const PERMS = DEPTS.map(d => ({ id: d.id, name: d.name + '發布' })).concat([{ id: 'production', name: '生產部處理' }]);
   const PRIO = { urgent: { name: '緊急', rank: 0 }, high: { name: '重要', rank: 1 }, normal: { name: '一般', rank: 2 } };
   const STATUS = { new: '待確認', ack: '已確認', doing: '處理中', done: '已完成' };
@@ -83,13 +85,44 @@
   const myName = () => (A && A.name()) || '';
   const postDepts = () => DEPTS.filter(d => can(d.id));
   const canHandle = () => can('production');
-  const canEditNotice = n => isAdmin() || can(n.dept) || (!!n.byEmail && n.byEmail === myEmail());
+  const canEditNotice = n => n.src !== 'pb' && (isAdmin() || can(n.dept) || (!!n.byEmail && n.byEmail === myEmail()));
   const canAddEvent = () => canHandle() || postDepts().length > 0;
   const canEditEvent = e => isAdmin() || canHandle() || (!!e.dept && can(e.dept)) || (!!e.byEmail && e.byEmail === myEmail());
   const permName = p => (PERMS.find(x => x.id === p) || { name: p }).name;
 
   // ================= 資料 =================
-  const notices = () => S.list('notices');
+  const notices = () => S.list('notices').concat(pbNotices());
+  const getNotice = id => String(id || '').startsWith('pb-') ? pbNotices().find(n => n.id === id) || null : S.get('notices', id);
+
+  // 夥伴交接看板的任務 → 看板通知的格式（內容以夥伴交接看板為準；生產部的處理紀錄存在 pbstate）
+  const hasPb = () => S.list('pbtasks').length > 0;
+  const laneDepts = () => (hasPb() ? [HANDOVER] : []).concat(DEPTS);
+  let pbMemo = { t: null, s: null, out: [] };
+  function pbNotices() {
+    const t = S.list('pbtasks'), s = S.list('pbstate');
+    if (pbMemo.t === t && pbMemo.s === s) return pbMemo.out;
+    const st = Object.fromEntries(s.map(x => [x.id, x]));
+    const out = t.filter(x => x && x.id && x.taskId).map(x => pbToNotice(x, st[x.id] || {}));
+    pbMemo = { t, s, out };
+    return out;
+  }
+  function pbToNotice(t, s) {
+    // 生產部按了完成／取消，但夥伴交接看板還沒收到（pushedAt 比較舊）→ 先照生產部的決定顯示，標「回報中」
+    const decided = typeof s.want === 'boolean';
+    const pending = decided && (Number(t.pushedAt) || 0) < (Number(s.wantAt) || 0);
+    const done = pending ? s.want : !!t.done;
+    const status = done ? 'done' : (s.status && s.status !== 'done' ? s.status : (s.ackAt ? 'ack' : 'new'));
+    const seen = Number(t.seenAt) || 0, title = t.title || String(t.content || '').split('\n')[0] || '（沒有內容）';
+    return {
+      id: t.id, src: 'pb', dept: 'handover', type: '交辦任務', title,
+      body: t.content && t.content.trim() !== title ? t.content : '', items: '', qty: '',
+      date: seen > 1 ? ymd(new Date(seen)) : '', due: t.dueDate || '', dueEnd: '', priority: 'normal', status, onCal: true,
+      owner: t.partner || '', reply: s.reply || '', replyBy: s.replyBy, replyAt: s.replyAt,
+      by: '夥伴交接看板', at: seen, ackBy: s.ackBy, ackAt: s.ackAt,
+      doneBy: done ? (s.doneBy || t.partner) : '', doneAt: done ? (s.doneAt || Date.parse(t.completedAt) || seen) : 0,
+      pb: { partner: t.partner, taskId: t.taskId, platformDone: !!t.done, pending, want: s.want, feedback: t.feedback, proposerNote: t.proposerNote, attachments: Number(t.attachments) || 0, status: t.status, completedAt: t.completedAt }
+    };
+  }
   const events = () => S.list('events');
   const settings = () => { const s = S.get('settings', 'main') || {}; return Object.assign({}, DEFAULT_SET, s, { types: Object.assign({}, s.types || {}) }); };
   const typesOf = dept => { const t = settings().types[dept]; return Array.isArray(t) && t.length ? t : (DEPT[dept] ? DEPT[dept].types : []); };
@@ -164,8 +197,8 @@
     });
     notices().forEach(n => {
       if (!n.due || n.onCal === false) return;
-      if (opt.proj && n.status === 'done') return;
-      if (depts && !depts.includes(n.dept)) return;
+      if (opt.proj && (n.status === 'done' || !projAllowed(n.dept))) return;
+      if (!opt.proj && depts && !depts.includes(n.dept)) return;
       const end = n.dueEnd && n.dueEnd > n.due ? n.dueEnd : n.due;
       each(n.due, end, day => add(day, { kind: 'notice', n, day, start: n.due, end }));
     });
@@ -223,7 +256,7 @@
     const newCnt = open.filter(n => n.status === 'new').length;
     const nb = $('#navNew'); nb.hidden = !newCnt; nb.textContent = newCnt;
     document.title = (newCnt ? `(${newCnt}) ` : '') + '生產部看板';
-    $('#deptList').innerHTML = DEPTS.map(d => {
+    $('#deptList').innerHTML = laneDepts().map(d => {
       const mine = open.filter(n => n.dept === d.id), nw = mine.filter(n => n.status === 'new').length;
       return `<button type="button" class="dept-row ${deptCls(d.id)} ${B.dept === d.id && view === 'board' ? 'on' : ''}" data-act="dept-filter" data-dept="${d.id}"><span class="sw"></span>${esc(d.name)}${nw ? `<span class="new">${nw} 新</span>` : ''}<span class="cnt">${mine.length}</span></button>`;
     }).join('');
@@ -334,7 +367,10 @@
         .map(([k, title]) => ({ title, cls: 'g-' + k, items: list.filter(n => dueGroup(n) === k) }))
         .filter(l => l.items.length);
     } else {
-      lanes = (B.dept ? DEPTS.filter(d => d.id === B.dept) : DEPTS).map(d => ({ dept: d.id, title: d.name, items: list.filter(n => n.dept === d.id) }));
+      lanes = (B.dept ? laneDepts().filter(d => d.id === B.dept) : laneDepts()).map(d => ({
+        dept: d.id, title: d.id === 'handover' ? '交辦給生產部的任務（夥伴交接看板）' : d.name,
+        cls: d.id === 'handover' && !B.dept ? 'wide' : '', items: list.filter(n => n.dept === d.id)
+      }));
     }
     const box = $('#bLanes');
     box.className = 'lanes' + (B.dept && B.group === 'dept' ? ' one' : '');
@@ -343,8 +379,10 @@
   function laneHtml(l) {
     const nw = l.items.filter(n => n.status === 'new').length;
     const head = `<span class="dtag ${l.dept ? deptCls(l.dept) : 'd-none'}">${esc(l.title)}</span>`;
-    const add = l.dept && can(l.dept) ? `<button type="button" class="icon-btn" data-act="new-notice" data-dept="${l.dept}" title="新增${esc(l.title)}通知" aria-label="新增${esc(l.title)}通知">＋</button>` : '';
-    const empty = S.status().loaded || notices().length ? (B.status === 'open' && !B.quick && !B.q ? '目前沒有未完成的事項' : '沒有符合條件的通知') : '讀取中…';
+    const add = l.dept && DEPTS.some(d => d.id === l.dept) && can(l.dept) ? `<button type="button" class="icon-btn" data-act="new-notice" data-dept="${l.dept}" title="新增${esc(l.title)}通知" aria-label="新增${esc(l.title)}通知">＋</button>` : '';
+    const empty = S.status().loaded || notices().length
+      ? (B.status === 'open' && !B.quick && !B.q ? (l.dept === 'handover' ? '目前沒有交辦給生產部的任務' : '目前沒有未完成的事項') : '沒有符合條件的通知')
+      : '讀取中…';
     return `<section class="lane ${l.cls || ''}"><div class="lane-h">${head}<span class="cnt">${l.items.length}</span>${nw ? `<span class="new">${nw} 待確認</span>` : ''}${add}</div>
       <div class="cards">${l.items.length ? l.items.map(cardHtml).join('') : `<div class="empty">${empty}</div>`}</div></section>`;
   }
@@ -355,7 +393,9 @@
       <div class="c-top">${B.group === 'due' ? dtag(n.dept) : ''}<span class="c-type">${esc(n.type || '')}</span>${prioPill(n)}${statusPill(n)}</div>
       <div class="c-title">${esc(n.title)}</div>
       ${meta ? `<div class="c-meta">${meta}</div>` : ''}
-      <div class="c-foot"><span>${esc(n.by || '')} · ${esc(stamp(n.at))}</span>${n.owner ? `<span>負責：${esc(n.owner)}</span>` : ''}${n.reply ? '<span class="rp">已回覆</span>' : ''}</div>
+      <div class="c-foot">${n.src === 'pb'
+        ? `<span>夥伴交接看板</span>${n.pb.attachments ? `<span>附件 ${n.pb.attachments} 張</span>` : ''}${n.pb.pending ? '<span class="pending">回報中</span>' : ''}`
+        : `<span>${esc(n.by || '')} · ${esc(stamp(n.at))}</span>`}${n.owner ? `<span>負責：${esc(n.owner)}</span>` : ''}${n.reply ? '<span class="rp">已回覆</span>' : ''}</div>
     </div>`;
   }
 
@@ -375,36 +415,43 @@
   }
   function renderDrawer() {
     const r = drawerRef;
-    const rec = S.get(r.kind === 'notice' ? 'notices' : 'events', r.id);
+    const rec = r.kind === 'notice' ? getNotice(r.id) : S.get('events', r.id);
     if (!rec) { closeDrawer(); return; }
     $('#drawer').innerHTML = r.kind === 'notice' ? noticeDrawer(rec) : eventDrawer(rec, r.day);
   }
   function noticeDrawer(n) {
-    const di = dueInfo(n);
+    const di = dueInfo(n), pb = n.src === 'pb';
     const rows = [
-      ['需處理日', n.due ? dueRange(n) + (di && di.text ? `　${di.text}` : '') : '未訂'],
-      ['相關品項', n.items], ['數量／規格', n.qty], ['說明', n.body], ['生產部負責', n.owner]
-    ].filter(r => r[1]);
+      [pb ? '預交日' : '需處理日', n.due ? dueRange(n) + (di && di.text ? `　${di.text}` : '') : '未訂'],
+      ['相關品項', n.items], ['數量／規格', n.qty], [pb ? '任務內容' : '說明', n.body], [pb ? '負責人' : '生產部負責', n.owner]
+    ].concat(pb ? [
+      ['提案人備註', n.pb.proposerNote], ['夥伴回饋', n.pb.feedback],
+      ['附件', n.pb.attachments ? `${n.pb.attachments} 張（請到夥伴交接看板查看）` : ''],
+      ['夥伴交接看板', (n.pb.platformDone ? '已完成' : '未完成') + (n.pb.status ? `（${n.pb.status}）` : '')]
+    ] : []).filter(r => r[1]);
     const prod = canHandle() ? `
       <div class="box prod"><h3>生產部處理</h3>
         <div class="btn-row">
           ${n.status === 'new' ? '<button type="button" class="btn primary" data-act="n-status" data-v="ack">確認收到</button>' : ''}
           ${n.status !== 'doing' && n.status !== 'done' ? '<button type="button" class="btn" data-act="n-status" data-v="doing">處理中</button>' : ''}
-          ${n.status !== 'done' ? '<button type="button" class="btn" data-act="n-status" data-v="done">標示完成</button>' : '<button type="button" class="btn" data-act="n-status" data-v="reopen">改回未完成</button>'}
+          ${n.status !== 'done' ? `<button type="button" class="btn" data-act="n-status" data-v="done">${pb ? '標示完成並回報' : '標示完成'}</button>` : '<button type="button" class="btn" data-act="n-status" data-v="reopen">改回未完成</button>'}
         </div>
-        <label class="field"><span>生產部負責人</span><input id="drOwner" maxlength="30" value="${esc(n.owner || '')}" placeholder="例：早班 陳組長"></label>
-        <label class="field"><span>回覆給${esc(deptName(n.dept))}</span><textarea id="drReply" rows="3" maxlength="500" placeholder="例：已調整排程，先改用替代品牌試做一批">${esc(n.reply || '')}</textarea></label>
-        <div class="btn-row"><button type="button" class="btn" data-act="n-reply">儲存回覆</button></div>
+        ${pb ? '<p class="hint">標示完成會回報到夥伴交接看板，並通知提案人；改回未完成也會同步取消。</p>' : `<label class="field"><span>生產部負責人</span><input id="drOwner" maxlength="30" value="${esc(n.owner || '')}" placeholder="例：早班 陳組長"></label>`}
+        <label class="field"><span>${pb ? '生產部備註（只留在生產部看板）' : '回覆給' + esc(deptName(n.dept))}</span><textarea id="drReply" rows="3" maxlength="500" placeholder="${pb ? '例：等模具到貨後週四處理' : '例：已調整排程，先改用替代品牌試做一批'}">${esc(n.reply || '')}</textarea></label>
+        <div class="btn-row"><button type="button" class="btn" data-act="n-reply">${pb ? '儲存備註' : '儲存回覆'}</button></div>
       </div>` : '';
+    const pbNote = pb && n.pb.pending
+      ? `<div class="banner">${n.pb.want ? '已標示完成，正在回報夥伴交接看板' : '已改回未完成，正在通知夥伴交接看板'}。如果一直沒有更新，系統每 5 分鐘會自動重試。</div>` : '';
     return `<div class="dr-h">${dtag(n.dept)}<span class="c-type">${esc(n.type || '')}</span><button type="button" class="icon-btn" data-act="close-drawer" aria-label="關閉">×</button></div>
       <div class="dr-b">
         <h2 id="drTitle">${esc(n.title)}</h2>
         <div class="dr-pills">${prioPill(n)}${statusPill(n)}${n.due && n.onCal !== false ? '<span class="pill">在行事曆上</span>' : ''}</div>
+        ${pbNote}
         <dl class="kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('')}</dl>
-        ${n.reply ? `<div class="reply">${esc(n.reply)}<small>生產部回覆 · ${esc(n.replyBy || '')} ${esc(stamp(n.replyAt))}</small></div>` : ''}
+        ${n.reply ? `<div class="reply">${esc(n.reply)}<small>${pb ? '生產部備註' : '生產部回覆'} · ${esc(n.replyBy || '')} ${esc(stamp(n.replyAt))}</small></div>` : ''}
         ${prod}
         <div class="log">
-          <span>發布：${esc(n.by || '')} · ${esc(stamp(n.at))}</span>
+          <span>${pb ? '來源：夥伴交接看板' + (n.at > 1 ? ' · 帶進看板 ' + esc(stamp(n.at)) : '') : `發布：${esc(n.by || '')} · ${esc(stamp(n.at))}`}</span>
           ${n.upAt ? `<span>修改：${esc(n.upBy || '')} · ${esc(stamp(n.upAt))}</span>` : ''}
           ${n.ackAt ? `<span>確認收到：${esc(n.ackBy || '')} · ${esc(stamp(n.ackAt))}</span>` : ''}
           ${n.status === 'done' && n.doneAt ? `<span>完成：${esc(n.doneBy || '')} · ${esc(stamp(n.doneAt))}</span>` : ''}
@@ -433,7 +480,31 @@
       </div>
       ${canEditEvent(e) ? `<div class="dr-f"><button type="button" class="btn" data-act="edit-event" data-id="${esc(e.id)}">編輯</button><button type="button" class="btn danger" data-act="del-event" data-id="${esc(e.id)}">刪除</button></div>` : ''}`;
   }
+  // 交辦任務的處理紀錄（pbstate，一筆對應一個任務）
+  function savePbState(id, patch) {
+    const cur = S.get('pbstate', id) || { id };
+    S.save('pbstate', Object.assign({}, cur, patch, { id, upBy: myName(), upAt: Date.now() }));
+  }
+  function setPbStatus(n, v) {
+    const now = Date.now(), who = myName(), patch = {};
+    if (v !== 'reopen' && !n.ackAt) { patch.ackBy = who; patch.ackAt = now; }
+    if (v === 'ack' || v === 'doing') {
+      patch.status = v;
+      savePbState(n.id, patch);
+      toast(v === 'ack' ? '已確認收到' : '已標示處理中');
+      return;
+    }
+    // 完成／改回未完成：記下決定（回報失敗時後端會依這筆重試），並立刻回報夥伴交接看板
+    const want = v === 'done';
+    Object.assign(patch, { status: want ? 'done' : 'ack', want, wantAt: now }, want ? { doneBy: who, doneAt: now } : {});
+    savePbState(n.id, patch);
+    toast(want ? '已標示完成，正在回報夥伴交接看板…' : '已改回未完成，正在通知夥伴交接看板…');
+    A.api('pbDone', { id: n.id, want, wantAt: now })
+      .then(() => { toast(want ? `已回報夥伴交接看板：「${n.title}」完成` : `已在夥伴交接看板取消完成：「${n.title}」`); S.syncNow().catch(() => {}); })
+      .catch(e => toast(`回報夥伴交接看板失敗：${e.message}（之後每 5 分鐘會自動重試）`, true));
+  }
   function setNoticeStatus(n, v) {
+    if (n.src === 'pb') { setPbStatus(n, v); return; }
     const now = Date.now(), who = myName(), patch = {};
     if (v === 'reopen') patch.status = 'ack';
     else patch.status = v;
@@ -581,7 +652,7 @@
     const first = new Date(y, m - 1, 1), dim = new Date(y, m, 0).getDate();
     const start = addDays(ymd(first), -first.getDay()), weeks = Math.ceil((first.getDay() + dim) / 7);
     const end = addDays(start, weeks * 7 - 1);
-    const legend = DEPTS.map(d => `<span class="dtag ${deptCls(d.id)}">${esc(d.name)}</span>`).join('') + '<span class="dtag d-none">生產部</span><span class="k"><i class="lg-ev"></i>行程</span><span class="k"><i class="lg-nt"></i>通知到期</span>';
+    const legend = laneDepts().map(d => `<span class="dtag ${deptCls(d.id)}">${esc(d.name)}</span>`).join('') + '<span class="dtag d-none">生產部</span><span class="k"><i class="lg-ev"></i>行程</span><span class="k"><i class="lg-nt"></i>通知到期</span>';
     let main;
     if (C.mode === 'month') {
       const map = entriesBetween(start, end);
@@ -668,7 +739,7 @@
         </section>
         <section class="panel"><h2>投影設定 <small>只影響這台裝置</small></h2>
           <div class="mlist">
-            <div class="field"><span>投影要顯示的部門</span><div class="deptchecks">${DEPTS.map(d => `<label class="check"><input type="checkbox" data-pd="${d.id}" ${!p.projDepts || p.projDepts.includes(d.id) ? 'checked' : ''}><span class="dtag ${deptCls(d.id)}">${esc(d.name)}</span></label>`).join('')}</div></div>
+            <div class="field"><span>投影要顯示的部門</span><div class="deptchecks">${hasPb() ? `<label class="check"><input type="checkbox" id="pfHandover" ${p.projHideHandover ? '' : 'checked'}><span class="dtag d-handover">夥伴交接任務</span></label>` : ''}${DEPTS.map(d => `<label class="check"><input type="checkbox" data-pd="${d.id}" ${!p.projDepts || p.projDepts.includes(d.id) ? 'checked' : ''}><span class="dtag ${deptCls(d.id)}">${esc(d.name)}</span></label>`).join('')}</div></div>
             <div class="field"><span>投影網址（電視或投影機用的電腦開這個網址，登入一次之後就會一直顯示）</span><div class="kbd-url"><input class="inp" id="projUrl" readonly value="${esc(projUrl)}"><button type="button" class="btn sm" data-act="copy-url">複製</button></div></div>
             <div class="btn-row"><a class="btn primary" href="#projector">開啟投影模式</a></div>
           </div>
@@ -686,6 +757,7 @@
           </form>
         </section>
         <section class="panel need-admin wide" id="usersPanel"></section>
+        <section class="panel need-admin wide" id="pbPanel"></section>
         <section class="panel need-admin"><h2>資料備份</h2>
           <div class="mlist">
             <p class="hint">雲端每天凌晨會自動備份（保留 30 天）。需要時也可以手動匯出一份 JSON。</p>
@@ -706,6 +778,8 @@
       if (notifPerm() === 'granted') { setPrefs({ desk: true }); toast('已開啟系統通知'); return; }
       Notification.requestPermission().then(r => { setPrefs({ desk: r === 'granted' }); toast(r === 'granted' ? '已開啟系統通知' : '瀏覽器沒有允許通知', r !== 'granted'); renderManage(); });
     });
+    const hv = $('#pfHandover');
+    if (hv) hv.addEventListener('change', () => setPrefs({ projHideHandover: !hv.checked }));
     $$('[data-pd]', el).forEach(c => c.addEventListener('change', () => {
       const on = $$('[data-pd]', el).filter(x => x.checked).map(x => x.dataset.pd);
       setPrefs({ projDepts: on.length === DEPTS.length ? null : on });
@@ -722,8 +796,32 @@
       saveSettings({ rotateSec: num('sfRotate', 5, 120, 12), popupSec: num('sfPopup', 5, 300, 25), doneDays: num('sfDone', 0, 30, 3), types });
       toast('已儲存看板設定');
     });
-    if (isAdmin()) { renderUsers(); if (!U.loaded) loadUsers(); }
+    if (isAdmin()) { renderUsers(); if (!U.loaded) loadUsers(); renderPb(); loadPb(); }
     renderSync();
+  }
+
+  // 夥伴交接看板串接狀態（管理員）
+  const PBS = { data: null, error: '', loading: false };
+  async function loadPb() {
+    PBS.loading = true; renderPb();
+    try { const j = await A.api('pbStatus'); PBS.data = j.pb || null; PBS.error = ''; }
+    catch (e) { PBS.error = e.message; }
+    PBS.loading = false; renderPb();
+  }
+  function renderPb() {
+    const box = $('#pbPanel'); if (!box) return;
+    const d = PBS.data, last = (d && d.last) || {};
+    const rows = d ? [
+      ['設定', d.configured ? '已設定網址與金鑰' : '尚未設定（雲端後端的指令碼屬性要有 PB_URL、PB_KEY）'],
+      ['定時同步', d.scheduled ? '每 5 分鐘' : '尚未啟用（設定好後在 Apps Script 執行 setupPartnerBoard）'],
+      ['上次同步', last.at ? `${stamp(last.at)}　${last.ok ? '成功' : '有問題'}，帶進 ${last.count || 0} 筆（未完成 ${last.open || 0} 筆）` : '還沒有同步過'],
+      ['算作生產部的夥伴', (last.partners || []).join('、') || (d.roles ? `夥伴名單 role 含「${d.roles.join('、')}」的人` : '')],
+      ['問題', last.error || '']
+    ].filter(r => r[1]) : [];
+    box.innerHTML = `<h2>夥伴交接看板串接 <small>指派給生產部夥伴的任務會自動帶進看板；生產部按完成會回報到夥伴交接看板並通知提案人</small></h2>
+      ${PBS.error ? `<p class="err">讀取串接狀態失敗：${esc(PBS.error)}</p>` : ''}
+      ${PBS.loading && !d ? '<p class="hint">讀取中…</p>' : `<dl class="kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('')}</dl>`}
+      <div class="btn-row"><button type="button" class="btn sm" data-act="pb-refresh">重新整理狀態</button></div>`;
   }
   function renderManageLive() { renderSync(); }
 
@@ -780,7 +878,8 @@
 
   // 備份、示範資料
   function exportJson() {
-    const data = { app: 'production-board', version: 1, exportedAt: new Date().toISOString(), notices: notices(), events: events(), settings: S.list('settings') };
+    // 夥伴交接任務以夥伴交接看板為準，不放進備份（只備份生產部的處理紀錄 pbstate）
+    const data = { app: 'production-board', version: 1, exportedAt: new Date().toISOString(), notices: S.list('notices'), events: events(), settings: S.list('settings'), pbstate: S.list('pbstate') };
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 1)], { type: 'application/json' }));
     a.download = `生產部看板備份_${today()}.json`;
@@ -793,7 +892,7 @@
       let d; try { d = JSON.parse(r.result); } catch (e) { toast('檔案不是正確的 JSON', true); return; }
       if (!d || d.app !== 'production-board' || !Array.isArray(d.notices) || !Array.isArray(d.events)) { toast('這不是生產部看板的備份檔', true); return; }
       if (!confirm(`要用這份備份（${d.notices.length} 則通知、${d.events.length} 個行程）取代目前全部資料嗎？`)) return;
-      S.replaceKinds({ notices: d.notices, events: d.events, settings: Array.isArray(d.settings) ? d.settings : [] });
+      S.replaceKinds(Object.assign({ notices: d.notices, events: d.events, settings: Array.isArray(d.settings) ? d.settings : [] }, Array.isArray(d.pbstate) ? { pbstate: d.pbstate } : {}));
       toast('已匯入備份');
     };
     r.readAsText(file);
@@ -884,6 +983,12 @@
   }
   function noticeAlert(n, update) {
     const di = dueInfo(n);
+    if (n.src === 'pb') {
+      return {
+        key: `n:${n.id}:0`, kind: 'notice', id: n.id, dept: n.dept, urgent: false, kicker: '新交辦任務', title: n.title,
+        lines: [n.owner ? `負責：${n.owner}` : '', di ? `預交日：${mdw(n.due)}　${di.text}` : '', '來自夥伴交接看板'].filter(Boolean)
+      };
+    }
     return {
       key: `n:${n.id}:${n.rev || 0}`, kind: 'notice', id: n.id, dept: n.dept, urgent: n.priority === 'urgent',
       kicker: update ? '通知更新' : (n.priority === 'urgent' ? '緊急通知' : '新通知'), title: n.title,
@@ -924,7 +1029,11 @@
     Object.keys(fired).forEach(k => { if (now - fired[k] > 3 * 86400000) { delete fired[k]; changed = true; } });
     if (changed) lsSet('pd_fired', fired);
   }
-  const projAllowed = dept => { const d = prefs().projDepts; return !d || !dept || d.includes(dept); };
+  const projAllowed = dept => {
+    const p = prefs();
+    if (dept === 'handover') return !p.projHideHandover;
+    return !p.projDepts || !dept || p.projDepts.includes(dept);
+  };
   function notify(al) {
     const p = prefs();
     if (proj.on) {
@@ -1043,8 +1152,7 @@
   function projRender() {
     if (!proj.on || !$('#pStats')) return;
     const t = today(), tm = addDays(t, 1), depts = prefs().projDepts;
-    const okDept = d => !depts || !d || depts.includes(d);
-    const open = notices().filter(n => n.status !== 'done' && okDept(n.dept)).sort(cmpNotice);
+    const open = notices().filter(n => n.status !== 'done' && projAllowed(n.dept)).sort(cmpNotice);
     $('#pDate').textContent = `${t.replace(/-/g, '/')}（${wk(t)}）`;
     $('#pTodayD').textContent = mdw(t);
     const st = [['待確認', open.filter(n => n.status === 'new').length, 'gold'], ['逾期', open.filter(n => bucket(n) === 0).length, 'hot'], ['今天到期', open.filter(n => bucket(n) === 1).length, 'warn'], ['緊急', open.filter(n => n.priority === 'urgent').length, 'hot']];
@@ -1211,18 +1319,21 @@
       case 'del-notice': armDelete(el, () => { S.remove('notices', id); closeDrawer(); toast('已刪除'); }); break;
       case 'edit-event': { const e = S.get('events', id); closeDrawer(); if (e) openEventForm(e); break; }
       case 'del-event': armDelete(el, () => { S.remove('events', id); closeDrawer(); toast('已刪除'); }); break;
-      case 'n-status': { const n = S.get('notices', drawerRef && drawerRef.id); if (n) setNoticeStatus(n, el.dataset.v); break; }
+      case 'n-status': { const n = getNotice(drawerRef && drawerRef.id); if (n) setNoticeStatus(n, el.dataset.v); break; }
       case 'n-reply': {
-        const n = S.get('notices', drawerRef && drawerRef.id); if (!n) break;
-        const reply = $('#drReply').value.trim(), owner = $('#drOwner').value.trim();
-        const patch = { owner };
+        const n = getNotice(drawerRef && drawerRef.id); if (!n) break;
+        const reply = $('#drReply').value.trim(), ownerEl = $('#drOwner');
+        const patch = {};
+        if (ownerEl) patch.owner = ownerEl.value.trim();
         if (reply !== (n.reply || '')) Object.assign(patch, { reply, replyBy: myName(), replyAt: Date.now() });
         if (n.status === 'new') Object.assign(patch, { status: 'ack', ackBy: myName(), ackAt: Date.now() });
         document.activeElement.blur();
-        S.save('notices', Object.assign({}, n, patch));
-        toast('已儲存回覆');
+        if (n.src === 'pb') savePbState(n.id, patch);
+        else S.save('notices', Object.assign({}, n, patch));
+        toast(n.src === 'pb' ? '已儲存備註' : '已儲存回覆');
         break;
       }
+      case 'pb-refresh': loadPb(); break;
       case 'b-status': B.status = el.dataset.v; B.quick = ''; renderBoardBody(); break;
       case 'b-group': B.group = el.dataset.v; renderBoardBody(); break;
       case 'quick': B.quick = B.quick === el.dataset.k ? '' : el.dataset.k; renderBoardBody(); break;
@@ -1265,7 +1376,7 @@
       case 'p-test': unlockAudio(); setTimeout(() => notify({ key: 'test:' + Date.now(), kind: 'test', dept: 'store', urgent: false, kicker: '測試通知', title: '各部門發布新通知時，會像這樣跳出來', lines: ['同時會響提示音；緊急通知會閃紅框、停留時間加倍', '點一下畫面就能關閉'] }), 60); break;
       case 'p-done': {
         // 投影畫面標示完成：按兩次才算（避免誤觸），第一次按時暫停翻頁
-        const n = S.get('notices', id);
+        const n = getNotice(id);
         if (!n || !canHandle()) break;
         if (!isArmed(id)) {
           proj.armed = { id, until: Date.now() + ARM_MS };
@@ -1277,7 +1388,7 @@
         }
         proj.armed = null; clearTimeout(proj.armT);
         setNoticeStatus(n, 'done');
-        toast(`已標示完成：${n.title}（要改回可到看板總覽）`);
+        if (n.src !== 'pb') toast(`已標示完成：${n.title}（要改回可到看板總覽）`);
         break;
       }
       case 'p-exit': projExit(false); break;

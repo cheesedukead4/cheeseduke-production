@@ -199,8 +199,8 @@
     var u = cloudUrl();
     if (!enabled || !state || !u) return Promise.reject(new Error('尚未登入'));
     var req;
-    if (action === 'users') {
-      req = fetch(u + (u.indexOf('?') < 0 ? '?' : '&') + 'action=users&token=' + encodeURIComponent(state.s) + '&_=' + Date.now(), { method: 'GET', redirect: 'follow', cache: 'no-store' });
+    if (action === 'users' || action === 'pbStatus') {
+      req = fetch(u + (u.indexOf('?') < 0 ? '?' : '&') + 'action=' + action + '&token=' + encodeURIComponent(state.s) + '&_=' + Date.now(), { method: 'GET', redirect: 'follow', cache: 'no-store' });
     } else {
       var body = Object.assign({ action: action, token: state.s }, payload || {});
       req = fetch(u, { method: 'POST', redirect: 'follow', cache: 'no-store', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body) });
