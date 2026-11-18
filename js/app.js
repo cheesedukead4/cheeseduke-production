@@ -112,10 +112,13 @@
     const pending = decided && (Number(t.pushedAt) || 0) < (Number(s.wantAt) || 0);
     const done = pending ? s.want : !!t.done;
     const status = done ? 'done' : (s.status && s.status !== 'done' ? s.status : (s.ackAt ? 'ack' : 'new'));
-    const seen = Number(t.seenAt) || 0, title = t.title || String(t.content || '').split('\n')[0] || '（沒有內容）';
+    const seen = Number(t.seenAt) || 0, content = String(t.content || '').trim();
+    const title = t.title || content.split('\n')[0] || '（沒有內容）';
+    // 夥伴交接看板的標題就是內容的第一行：說明只放第一行之後的部分，避免重複
+    const body = content.startsWith(title) ? content.slice(title.length).trim() : content;
     return {
       id: t.id, src: 'pb', dept: 'handover', type: '交辦任務', title,
-      body: t.content && t.content.trim() !== title ? t.content : '', items: '', qty: '',
+      body, items: '', qty: '',
       date: seen > 1 ? ymd(new Date(seen)) : '', due: t.dueDate || '', dueEnd: '', priority: 'normal', status, onCal: true,
       owner: t.partner || '', reply: s.reply || '', replyBy: s.replyBy, replyAt: s.replyAt,
       by: '夥伴交接看板', at: seen, ackBy: s.ackBy, ackAt: s.ackAt,
