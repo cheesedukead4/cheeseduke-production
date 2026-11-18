@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>生產部看板</title>
+<meta name="description" content="彙整採購、門市、倉管、物管、通路與產銷會議要給生產部的通知，含行事曆與投影提醒">
+<meta name="theme-color" content="#1b2737">
+<meta name="application-name" content="生產看板">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="生產看板">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Noto+Sans+TC:wght@400;500;700;900&display=swap">
+<link rel="stylesheet" href="css/app.css">
+<script src="config.js"></script>
+<script src="js/auth.js"></script>
+<script src="js/cloud-store.js"></script>
+<script src="js/app.js" defer></script>
+</head>
+<body>
+<div class="app" id="app">
+<aside class="sidebar">
+  <div class="brand">
+    <div class="brand-kicker">CHEESE DUKE · 生產部</div>
+    <div class="brand-name">生產部看板</div>
+    <div class="brand-sub">各部門通知・行事曆・投影</div>
+  </div>
+  <nav class="nav" aria-label="主要功能">
+    <a class="nav-btn" href="#board" data-view="board"><span class="nav-ico" aria-hidden="true">▦</span>看板總覽<span class="nav-badge" id="navNew" hidden></span></a>
+    <a class="nav-btn" href="#calendar" data-view="calendar"><span class="nav-ico" aria-hidden="true">▤</span>行事曆</a>
+    <a class="nav-btn" href="#projector" data-view="projector"><span class="nav-ico" aria-hidden="true">▶</span>投影模式</a>
+    <a class="nav-btn" href="#manage" data-view="manage"><span class="nav-ico" aria-hidden="true">⚙</span>設定與人員</a>
+  </nav>
+  <div class="nav-title">各部門未完成</div>
+  <div class="dept-list" id="deptList"></div>
+  <div class="side-foot">
+    <button type="button" class="sync" id="syncBox" data-act="sync-now" title="立即同步"><span class="sync-dot" aria-hidden="true"></span><span id="syncText">讀取中…</span></button>
+    <div class="me" id="meBox"></div>
+  </div>
+</aside>
+<main class="main" id="main">
+  <section class="view" id="view-board" aria-label="看板總覽" hidden></section>
+  <section class="view" id="view-calendar" aria-label="行事曆" hidden></section>
+  <section class="view" id="view-manage" aria-label="設定與人員" hidden></section>
+</main>
+</div>
+
+<div class="proj" id="proj" hidden></div>
+
+<div class="scrim" id="drawerScrim" data-act="close-drawer" hidden></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drTitle" hidden></aside>
+
+<div class="scrim modal-wrap" id="modal" hidden>
+  <div class="modal" id="modalBox" role="dialog" aria-modal="true" aria-labelledby="mdTitle"></div>
+</div>
+
+<div class="notes" id="notes" aria-live="polite"></div>
+<div class="toast" id="toast" role="status" hidden></div>
+<input type="file" id="importFile" accept="application/json,.json" hidden>
+</body>
+</html>

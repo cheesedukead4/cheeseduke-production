@@ -1,0 +1,17 @@
+{
+  "name": "生產部看板",
+  "short_name": "生產看板",
+  "description": "彙整採購、門市、倉管、物管、通路與產銷會議要給生產部的通知，含行事曆與投影提醒",
+  "lang": "zh-Hant",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f1f4f7",
+  "theme_color": "#1b2737",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}
