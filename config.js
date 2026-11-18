@@ -11,5 +11,6 @@ window.PD_AUTH = {
 };
 
 window.PD_CLOUD = {
-  url: ''
+  // Apps Script 專案「生產部看板_雲端後端」（cheeseduke.ad4@gmail.com）的網頁應用程式網址
+  url: 'https://script.google.com/macros/s/AKfycbz7cxEWXby-uY3laoiL98Sp-O5SY9NqmVY_Aoat9PlbsvkVYYiwxs-iUtX79_tGs7p9/exec'
 };
