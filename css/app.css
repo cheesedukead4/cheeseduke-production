@@ -452,8 +452,9 @@ button.chip:hover{border-color:var(--faint)}
 .p-card > .top,.p-card > .p-foot{flex-shrink:0}
 .p-viewport{flex:1 1 auto;min-height:0;overflow:hidden}
 .p-scroll{display:flex;flex-direction:column;gap:.45em}
-.p-card.scroll .p-scroll{animation:pscroll var(--dur,12s) ease-in-out infinite alternate}
-@keyframes pscroll{0%,12%{transform:translateY(0)}88%,100%{transform:translateY(var(--dist,0))}}
+/* 字多到縮到最小還放不下（不捲動）：下緣淡出，左下標示「點一下看全文」 */
+.p-card.clip .p-viewport{-webkit-mask-image:linear-gradient(to bottom,#000 78%,transparent);mask-image:linear-gradient(to bottom,#000 78%,transparent)}
+.p-card.clip .p-foot::before{content:"字很多，點一下看全文";flex:none;align-self:center;background:var(--p-gold);color:#1d1404;font-weight:900;font-size:.85em;border-radius:.4em;padding:.2em .7em}
 .p-card.urgent{background:color-mix(in srgb,var(--p-red) 13%,var(--p-panel-2));box-shadow:inset 0 .3em 0 var(--dc),inset 0 0 0 2px color-mix(in srgb,var(--p-red) 70%,transparent)}
 .p-card .top{display:flex;align-items:center;gap:.6em;flex-wrap:wrap;padding-top:.2em}
 .p-card .dtag{font-size:1em}
@@ -501,11 +502,13 @@ button.chip:hover{border-color:var(--faint)}
 .p-dn.urgent{box-shadow:inset 0 0 0 1.5px var(--p-red)}
 .p-ticker{display:flex;align-items:center;gap:1em;padding:.6em 1.6em;border-top:1px solid var(--p-line);background:var(--p-panel);min-width:0}
 .p-tk-label{flex:none;background:var(--p-gold);color:#1d1404;font-weight:900;font-size:.9em;letter-spacing:.1em;border-radius:.35em;padding:.15em .7em}
-.p-tk-track{overflow:hidden;flex:1;min-width:0;mask-image:linear-gradient(90deg,transparent,#000 3%,#000 97%,transparent)}
-.p-tk-run{display:inline-flex;white-space:nowrap;animation:ptk linear infinite;will-change:transform}
-.p-tk-run span{padding-right:3em;font-size:1.05em}
-.p-tk-run span b{font-weight:900}
-@keyframes ptk{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+/* 最新：不捲動，一次一則完整顯示（最多兩行），每 7 秒淡入下一則 */
+.p-tk-track{position:relative;flex:1;min-width:0;height:2.8em;overflow:hidden}
+.p-tk-item{position:absolute;inset:0;display:flex;align-items:center;opacity:0;visibility:hidden;transition:opacity .6s,visibility .6s;font-size:calc(1.05em * var(--k,1))}
+.p-tk-item.on{opacity:1;visibility:visible}
+.p-tk-item .tx{display:block;line-height:1.35;overflow-wrap:anywhere}
+.p-tk-item b{font-weight:900}
+.p-tk-count{flex:none;font-family:var(--font-num);color:var(--p-muted);font-size:.9em}
 .p-ctl{position:absolute;bottom:calc(env(safe-area-inset-bottom,0px) + 3.6em);right:calc(env(safe-area-inset-right,0px) + 1.6em);display:flex;gap:.5em;padding:.4em;border-radius:.7em;background:rgba(17,26,39,.92);box-shadow:0 10px 30px rgba(0,0,0,.5);transition:opacity .3s;z-index:3}
 .proj.idle .p-ctl{opacity:0;pointer-events:none}
 .p-ctl button{border:1px solid var(--p-line);background:var(--p-panel-2);color:var(--p-ink);border-radius:.45em;padding:.35em .9em;font-size:.85em}

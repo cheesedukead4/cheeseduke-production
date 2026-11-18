@@ -1122,7 +1122,7 @@
         <section class="p-col"><div class="p-center-h"><h2 id="pCTitle">重點通知</h2><div class="p-pager" id="pPager"></div></div><div class="p-prog"><i id="pProg"></i></div><div class="p-center" id="pCenter"></div></section>
         <section class="p-col"><h2>7 天內到期</h2><div class="p-list" id="pDue"></div></section>
       </div>
-      <div class="p-ticker"><span class="p-tk-label">最新</span><div class="p-tk-track"><div class="p-tk-run" id="pTicker"></div></div></div>
+      <div class="p-ticker"><span class="p-tk-label">最新</span><div class="p-tk-track" id="pTicker"></div><span class="p-tk-count" id="pTkCount"></span></div>
       <div class="p-ctl" id="pCtl">
         <button type="button" data-act="p-full">全螢幕</button>
         <button type="button" data-act="p-sound" id="pSoundBtn">提示音</button>
@@ -1137,6 +1137,7 @@
     projCenter();
     projClock();
     proj.clockT = setInterval(projClock, 1000);
+    proj.tkT = setInterval(() => { proj.tkIdx = (proj.tkIdx || 0) + 1; projTicker(); }, 7000);
     projSchedule();
     requestWake();
     projActive();
@@ -1144,7 +1145,7 @@
   }
   function projExit(fromRoute) {
     proj.on = false;
-    clearInterval(proj.clockT); clearTimeout(proj.rotT); clearTimeout(proj.popT); clearTimeout(proj.idleT); clearTimeout(proj.zoomT);
+    clearInterval(proj.clockT); clearInterval(proj.tkT); clearTimeout(proj.rotT); clearTimeout(proj.popT); clearTimeout(proj.idleT); clearTimeout(proj.zoomT);
     proj.queue = []; proj.cur = null; proj.zoom = null; proj.pageSig = '';
     const el = $('#proj'); el.hidden = true; el.innerHTML = ''; el.classList.remove('idle');
     document.documentElement.classList.remove('proj-on');
@@ -1197,16 +1198,29 @@
     // 輪播頁
     proj.list = open; proj.week = map;
     projCenter();
-    // 跑馬燈：最新發布的在前
-    const tk = open.slice().sort((a, b) => (b.at || 0) - (a.at || 0)).slice(0, 20);
-    const html = tk.length ? tk.map(n => `<span>${dtag(n.dept)} <b>${esc(n.title)}</b>${n.due ? `（${esc(md(n.due))}）` : ''}</span>`).join('') : '<span>目前沒有待處理的通知</span>';
-    const run = $('#pTicker');
-    if (run.dataset.sig !== html) {
-      run.dataset.sig = html; run.innerHTML = html + html;
-      requestAnimationFrame(() => { run.style.animationDuration = Math.max(25, run.scrollWidth / 2 / 70) + 's'; });
-    }
+    // 最新：不捲動，一次完整顯示一則，每 7 秒換下一則（最新發布的在前）
+    const tk = open.slice().sort((a, b) => (b.at || 0) - (a.at || 0)).slice(0, 10);
+    const html = tk.length
+      ? tk.map(n => `<div class="p-tk-item" data-act="p-zoom" data-kind="notice" data-id="${esc(n.id)}"><span class="tx">${dtag(n.dept)} <b>${esc(n.title)}</b>${n.due ? `（${esc(mdw(n.due))}）` : ''}</span></div>`).join('')
+      : '<div class="p-tk-item"><span class="tx">目前沒有待處理的通知</span></div>';
+    const track = $('#pTicker');
+    if (track.dataset.sig !== html) { track.dataset.sig = html; track.innerHTML = html; proj.tkIdx = 0; }
+    projTicker();
     if (proj.zoom) projZoomRender();
     renderSync();
+  }
+  // 「最新」列：顯示第 tkIdx 則，字太長就縮小到放得下（最多兩行）
+  function projTicker() {
+    const track = $('#pTicker'); if (!track) return;
+    const items = $$('.p-tk-item', track); if (!items.length) return;
+    proj.tkIdx = (proj.tkIdx || 0) % items.length;
+    items.forEach((e, i) => e.classList.toggle('on', i === proj.tkIdx));
+    const cur = items[proj.tkIdx], tx = cur.querySelector('.tx');
+    for (let k = 1; k >= 0.6 - 0.001; k = Math.round((k - 0.05) * 100) / 100) {
+      cur.style.setProperty('--k', String(k));
+      if (tx.scrollHeight <= cur.clientHeight + 1) break;
+    }
+    const cnt = $('#pTkCount'); if (cnt) cnt.textContent = items.length > 1 ? `${proj.tkIdx + 1}／${items.length}` : '';
   }
   const overflowing = el => el.scrollHeight > el.clientHeight + 1;
   // 放不下的項目收起來後，在清單最後顯示「還有 N 項」（可以點開看全部）
@@ -1258,12 +1272,17 @@
     meas.style.cssText = `position:absolute;left:-20000px;top:0;visibility:hidden;width:${w}px;height:${h}px`;
     $('#proj').appendChild(meas);
     const fits = (items, n) => { meas.innerHTML = cardsHtml(items, n); return $$('.p-card', meas).every(c => fitCard(c, MIN_K[n])); };
-    const pages = [];
-    for (let i = 0; i < list.length;) {
-      const four = list.slice(i, i + 4), two = list.slice(i, i + 2);
-      if (four.length >= 3 && fits(four, 4)) { pages.push({ items: four, n: 4 }); i += four.length; }
-      else if (two.length === 2 && fits(two, 2)) { pages.push({ items: two, n: 2 }); i += 2; }
-      else { pages.push({ items: [list[i]], n: 1 }); i += 1; }
+    // 依排序逐頁裝：每頁從最前面那張開始，往後找放得下的一起放（最多 4 張）；
+    // 放不下的長卡片留到後面的頁，短的不會因為後面有一張長的就自己佔一整頁
+    const pages = [], left = list.slice();
+    const layoutOf = k => k >= 3 ? 4 : k;
+    while (left.length) {
+      const page = [left.shift()];
+      for (let j = 0; j < left.length && j < 8 && page.length < 4; j++) {
+        const trial = page.concat([left[j]]);
+        if (fits(trial, layoutOf(trial.length))) { page.push(left[j]); left.splice(j, 1); j--; }
+      }
+      pages.push({ items: page, n: layoutOf(page.length) });
     }
     meas.remove();
     proj.pageSig = sig; proj.pageList = pages;
@@ -1284,14 +1303,9 @@
       box.innerHTML = cardsHtml(page.items, page.n);
       if (!projNarrow()) $$('.p-card', box).forEach(c => {
         if (fitCard(c, page.n === 1 ? MIN_K[1] : Math.min(MIN_K[page.n], MIN_K[1]))) return;
-        const vp = c.querySelector('.p-viewport'), sc = c.querySelector('.p-scroll');
-        const dist = vp.clientHeight - sc.scrollHeight;
-        if (dist >= 0) return;
-        const dur = Math.max(8, Math.round(-dist / 20));
-        c.classList.add('scroll');
-        c.style.setProperty('--dist', dist + 'px');
-        c.style.setProperty('--dur', dur + 's');
-        proj.curDur = Math.max(proj.curDur, dur + 2);   // 這一頁停留到內容捲完一次
+        if (fitCard(c, 0.6)) return;   // 單張字很多：再縮小一點
+        // 還是放不下（不用捲動的方式）：顯示到放得下的地方，下方標示「點一下看全文」，點一下就放大顯示全部
+        c.classList.add('clip');
       });
     } else {
       const t = today();
