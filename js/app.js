@@ -101,14 +101,14 @@
     const t = S.list('pbtasks'), s = S.list('pbstate');
     if (pbMemo.t === t && pbMemo.s === s) return pbMemo.out;
     const st = Object.fromEntries(s.map(x => [x.id, x]));
-    const out = t.filter(x => x && x.id && x.taskId).map(x => pbToNotice(x, st[x.id] || {}));
+    // 只顯示交辦給生產部的任務（負責人的部門含「生產」；舊資料沒有部門的也是生產部的）
+    const out = t.filter(x => x && x.id && x.taskId && (!x.role || String(x.role).includes('生產'))).map(x => pbToNotice(x, st[x.id] || {}));
     pbMemo = { t, s, out };
     return out;
   }
   function pbToNotice(t, s) {
-    // 依負責人的部門放進各部門欄；生產部以外的任務只顯示（ro），狀態照夥伴交接看板，由負責人自己在那邊勾完成
-    const dept = DEPT[t.dept] ? t.dept : 'handover', ro = dept !== 'handover';
-    if (ro) s = {};
+    // 依「送件人」的部門放進各部門欄（採購送來的放採購欄…），不知道送件人的放「交辦給生產部」；全部都是生產部要做的事
+    const dept = DEPT[t.dept] ? t.dept : 'handover', ro = false;
     // 生產部按了完成／取消，但夥伴交接看板還沒收到（pushedAt 比較舊）→ 先照生產部的決定顯示，標「回報中」
     const decided = typeof s.want === 'boolean';
     const pending = decided && (Number(t.pushedAt) || 0) < (Number(s.wantAt) || 0);
@@ -119,15 +119,21 @@
     // 夥伴交接看板的標題就是內容的第一行：說明只放第一行之後的部分，避免重複
     const body = content.startsWith(title) ? content.slice(title.length).trim() : content;
     return {
-      id: t.id, src: 'pb', dept, type: ro ? '夥伴交接任務' : '交辦任務', title,
+      id: t.id, src: 'pb', dept, type: '交辦任務', title,
       body, items: '', qty: '',
       date: seen > 1 ? ymd(new Date(seen)) : '', due: t.dueDate || '', dueEnd: '', priority: 'normal', status, onCal: true,
       owner: t.partner || '', reply: s.reply || '', replyBy: s.replyBy, replyAt: s.replyAt,
       by: '夥伴交接看板', at: seen, ackBy: s.ackBy, ackAt: s.ackAt,
       doneBy: done ? (s.doneBy || t.partner) : '', doneAt: done ? (s.doneAt || Date.parse(t.completedAt) || seen) : 0,
-      pb: { ro, role: t.role || '', partner: t.partner, taskId: t.taskId, platformDone: !!t.done, pending, want: s.want, feedback: t.feedback, proposerNote: t.proposerNote, attachments: Number(t.attachments) || 0, status: t.status, completedAt: t.completedAt }
+      pb: { ro, role: t.role || '', from: t.from || '', fromRole: t.fromRole || '', partner: t.partner, taskId: t.taskId, platformDone: !!t.done, pending, want: s.want, feedback: t.feedback, proposerNote: t.proposerNote, attachments: Number(t.attachments) || 0, status: t.status, completedAt: t.completedAt }
     };
   }
+  // 交辦任務是誰送的（夥伴交接看板有提供送件人時才有）：「採購部千瑢」或「千瑢（採購部）」
+  const pbFrom = n => {
+    if (!n || n.src !== 'pb') return '';
+    const f = n.pb.from, r = n.pb.fromRole;
+    return f && r && !f.includes(r.replace(/部$/, '')) ? `${f}（${r}）` : (f || r || '');
+  };
   const events = () => S.list('events');
   const settings = () => { const s = S.get('settings', 'main') || {}; return Object.assign({}, DEFAULT_SET, s, { types: Object.assign({}, s.types || {}) }); };
   const typesOf = dept => { const t = settings().types[dept]; return Array.isArray(t) && t.length ? t : (DEPT[dept] ? DEPT[dept].types : []); };
@@ -393,7 +399,7 @@
   }
   function cardHtml(n) {
     const cls = ['card', deptCls(n.dept), n.priority === 'urgent' && n.status !== 'done' ? 'urgent' : '', n.status === 'new' ? 'is-new' : '', n.status === 'done' ? 'done' : ''].join(' ');
-    const meta = [dueHtml(n), n.items ? `<span class="it">品項：${esc(n.items)}</span>` : '', n.qty ? `<span class="it">數量：${esc(n.qty)}</span>` : ''].filter(Boolean).join('');
+    const meta = [dueHtml(n), pbFrom(n) ? `<span class="it from">來自：${esc(pbFrom(n))}</span>` : '', n.items ? `<span class="it">品項：${esc(n.items)}</span>` : '', n.qty ? `<span class="it">數量：${esc(n.qty)}</span>` : ''].filter(Boolean).join('');
     return `<div class="${cls}" role="button" tabindex="0" data-act="open-notice" data-id="${esc(n.id)}">
       <div class="c-top">${B.group === 'due' ? dtag(n.dept) : ''}<span class="c-type">${esc(n.type || '')}</span>${prioPill(n)}${statusPill(n)}</div>
       <div class="c-title">${esc(n.title)}</div>
@@ -428,6 +434,7 @@
     const di = dueInfo(n), pb = n.src === 'pb';
     const rows = [
       [pb ? '預交日' : '需處理日', n.due ? dueRange(n) + (di && di.text ? `　${di.text}` : '') : '未訂'],
+      [pb ? '送件人' : '', pb ? (pbFrom(n) || '（夥伴交接看板目前沒有提供）') : ''],
       ['相關品項', n.items], ['數量／規格', n.qty], [pb ? '任務內容' : '說明', n.body], [pb ? '負責人' : '生產部負責', n.owner]
     ].concat(pb ? [
       ['提案人備註', n.pb.proposerNote], ['夥伴回饋', n.pb.feedback],
@@ -815,33 +822,36 @@
     catch (e) { PBS.error = e.message; }
     PBS.loading = false; renderPb();
   }
-  // 夥伴交接看板的部門（role）→ 看板的哪一欄
-  const PB_TARGETS = [['', '不帶入'], ['handover', '交辦給生產部（可回報完成）'], ['purchase', '採購'], ['store', '門市'], ['warehouse', '倉管'], ['material', '物管'], ['channel', '通路'], ['meeting', '產銷會議']];
+  // 送件部門（夥伴交接看板的 role）→ 交辦任務放進看板的哪一欄
+  const PB_TARGETS = [['handover', '交辦給生產部（不分部門）'], ['purchase', '採購'], ['store', '門市'], ['warehouse', '倉管'], ['material', '物管'], ['channel', '通路'], ['meeting', '產銷會議']];
   function renderPb() {
     const box = $('#pbPanel'); if (!box) return;
     const d = PBS.data, last = (d && d.last) || {};
     const partners = (last.partners || []).filter(p => p && typeof p === 'object');
+    const prodNames = partners.filter(p => p.prod).map(p => p.name);
     const roles = [];
     partners.forEach(p => {
       let r = roles.find(x => x.role === p.role);
-      if (!r) { r = { role: p.role, dept: p.dept || '', names: [] }; roles.push(r); }
+      if (!r) { r = { role: p.role, dept: p.dept || 'handover', names: [] }; roles.push(r); }
       r.names.push(p.name);
     });
     const rows = d ? [
       ['設定', d.configured ? '已設定網址與金鑰' : '尚未設定（雲端後端的指令碼屬性要有 PB_URL、PB_KEY）'],
       ['定時同步', d.scheduled ? '每 5 分鐘' : '尚未啟用（設定好後在 Apps Script 執行 setupPartnerBoard）'],
-      ['上次同步', last.at ? `${stamp(last.at)}　${last.ok ? '成功' : '有問題'}，帶進 ${last.count || 0} 筆（未完成 ${last.open || 0} 筆）` : '還沒有同步過'],
+      ['生產部夥伴', prodNames.join('、')],
+      ['上次同步', last.at ? `${stamp(last.at)}　${last.ok ? '成功' : '有問題'}，交辦給生產部的任務 ${last.count || 0} 筆（未完成 ${last.open || 0} 筆）` : '還沒有同步過'],
+      ['送件人資料', last.at && last.withFrom != null ? (last.withFrom ? `${last.withFrom} 筆知道送件人，已依送件部門分欄` : '夥伴交接看板目前沒有提供送件人，交辦任務暫時都放在「交辦給生產部」') : ''],
       ['問題', last.error || '']
     ].filter(r => r[1]) : [];
-    box.innerHTML = `<h2>夥伴交接看板串接 <small>依負責人的部門把任務帶進各部門欄；交辦給生產部的任務，生產部按完成會回報並通知提案人</small></h2>
+    box.innerHTML = `<h2>夥伴交接看板串接 <small>只帶進交辦給生產部的任務，依送件部門放進各部門欄；生產部按完成會回報並通知提案人</small></h2>
       ${PBS.error ? `<p class="err">讀取串接狀態失敗：${esc(PBS.error)}</p>` : ''}
       ${PBS.loading && !d ? '<p class="hint">讀取中…</p>' : `<dl class="kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('')}</dl>`}
-      ${roles.length ? `<div class="field"><span>部門對應（夥伴交接看板的部門 → 生產部看板的哪一欄）</span>
-        <div class="tbl-wrap"><table class="tbl pbmap"><thead><tr><th>夥伴交接看板的部門</th><th>夥伴</th><th>放進看板的</th></tr></thead><tbody>
+      ${roles.length ? `<div class="field"><span>送件部門對應（誰送來的 → 放進生產部看板的哪一欄）</span>
+        <div class="tbl-wrap"><table class="tbl pbmap"><thead><tr><th>送件部門</th><th>夥伴</th><th>放進看板的</th></tr></thead><tbody>
         ${roles.map((r, i) => `<tr><td>${esc(r.role || '（沒有部門）')}</td><td>${esc(r.names.join('、'))}</td>
           <td><select class="inp" data-pbrole="${i}">${PB_TARGETS.map(([v, t]) => `<option value="${v}" ${v === r.dept ? 'selected' : ''}>${t}</option>`).join('')}</select></td></tr>`).join('')}
         </tbody></table></div>
-        <p class="hint">其他部門的任務只顯示給生產部參考，完成由負責人在夥伴交接看板勾選；只有「交辦給生產部」的任務能在這裡按完成並回報。</p></div>` : ''}
+        <p class="hint">只會帶進「負責人是生產部夥伴」的任務；其他部門自己的任務不會出現在這個看板。這張表決定的是「某部門送給生產部的任務」要放在哪一欄。</p></div>` : ''}
       <div class="btn-row">
         ${roles.length ? '<button type="button" class="btn sm primary" data-act="pb-savemap">儲存部門對應並立即同步</button>' : ''}
         <button type="button" class="btn sm" data-act="pb-sync" ${d && d.configured ? '' : 'disabled'}>立即同步</button>
@@ -1031,7 +1041,7 @@
     if (n.src === 'pb') {
       return {
         key: `n:${n.id}:0`, kind: 'notice', id: n.id, dept: n.dept, urgent: false, kicker: '新交辦任務', title: n.title, body: n.body || '',
-        lines: [n.owner ? `負責：${n.owner}` : '', di ? `預交日：${mdw(n.due)}　${di.text}` : '', '來自夥伴交接看板'].filter(Boolean)
+        lines: [pbFrom(n) ? `來自：${pbFrom(n)}` : '', n.owner ? `負責：${n.owner}` : '', di ? `預交日：${mdw(n.due)}　${di.text}` : '', '來源：夥伴交接看板'].filter(Boolean)
       };
     }
     return {
@@ -1374,7 +1384,7 @@
     const di = dueInfo(n);
     const tags = (n.priority === 'urgent' ? '<span class="p-pill urgent">緊急</span>' : n.priority === 'high' ? '<span class="p-pill high">重要</span>' : '') +
       (n.status === 'new' ? '<span class="p-pill new">待確認</span>' : `<span class="p-pill">${STATUS[n.status] || ''}</span>`);
-    const meta = [n.items ? `<span>品項 <b>${esc(n.items)}</b></span>` : '', n.qty ? `<span>數量 <b>${esc(n.qty)}</b></span>` : '', n.owner ? `<span>負責 <b>${esc(n.owner)}</b></span>` : ''].join('');
+    const meta = [pbFrom(n) ? `<span>來自 <b>${esc(pbFrom(n))}</b></span>` : '', n.items ? `<span>品項 <b>${esc(n.items)}</b></span>` : '', n.qty ? `<span>數量 <b>${esc(n.qty)}</b></span>` : '', n.owner ? `<span>負責 <b>${esc(n.owner)}</b></span>` : ''].join('');
     return `<article class="p-card ${deptCls(n.dept)} ${n.priority === 'urgent' ? 'urgent' : ''}" data-act="p-zoom" data-kind="notice" data-id="${esc(n.id)}">
       <div class="top">${dtag(n.dept)}<span class="ty">${esc(n.type || '')}</span><span class="tg">${tags}</span></div>
       <div class="p-viewport"><div class="p-scroll">
@@ -1418,7 +1428,7 @@
       head = `${dtag(n.dept)}<span class="ty">${esc(n.type || '')}</span><span class="tg">${n.priority === 'urgent' ? '<span class="p-pill urgent">緊急</span>' : n.priority === 'high' ? '<span class="p-pill high">重要</span>' : ''}${n.status === 'new' ? '<span class="p-pill new">待確認</span>' : `<span class="p-pill">${STATUS[n.status] || ''}</span>`}</span>`;
       body = `<div class="p-zoom-t">${esc(n.title)}</div>${n.body ? `<div class="p-zoom-b">${esc(n.body)}</div>` : ''}` + kv([
         [pb ? '預交日' : '需處理', n.due ? dueRange(n) + (di && di.text ? '　' + di.text : '') : '未訂'],
-        ['品項', n.items], ['數量', n.qty], [pb ? '負責人' : '生產部負責', n.owner], [pb ? '生產部備註' : '生產部回覆', n.reply]
+        ['來自', pbFrom(n)], ['品項', n.items], ['數量', n.qty], [pb ? '負責人' : '生產部負責', n.owner], [pb ? '生產部備註' : '生產部回覆', n.reply]
       ].concat(pb
         ? [['提案人備註', n.pb.proposerNote], ['夥伴回饋', n.pb.feedback], ['附件', n.pb.attachments ? `${n.pb.attachments} 張（請到夥伴交接看板查看）` : ''], ['來源', '夥伴交接看板']]
         : [['發布', n.by ? `${n.by}　${stamp(n.at)}` : '']]));
