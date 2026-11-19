@@ -1,12 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-<rect width="512" height="512" rx="112" fill="#1b2737"/>
-<polygon points="100,136 404,136 404,408 100,408" fill="#f4f6f9"/>
-<polygon points="100,136 404,136 404,204 100,204" fill="#f2b33d"/>
-<polygon points="164,108 188,108 188,164 164,164" fill="#c3cddb"/>
-<polygon points="316,108 340,108 340,164 316,164" fill="#c3cddb"/>
-<polygon points="136,238 368,238 368,264 136,264" fill="#2f6bd0"/>
-<polygon points="136,290 326,290 326,316 136,316" fill="#c95c14"/>
-<polygon points="136,342 346,342 346,368 136,368" fill="#0f8276"/>
-<circle cx="398" cy="142" r="66" fill="#1b2737"/>
+<rect width="512" height="512" rx="112" fill="#0f3f25"/>
+<polygon points="100,136 404,136 404,408 100,408" fill="#f5edd8"/>
+<polygon points="100,136 404,136 404,204 100,204" fill="#c9a050"/>
+<polygon points="164,108 188,108 188,164 164,164" fill="#e8c97a"/>
+<polygon points="316,108 340,108 340,164 316,164" fill="#e8c97a"/>
+<polygon points="136,238 368,238 368,264 136,264" fill="#3d6a86"/>
+<polygon points="136,290 326,290 326,316 136,316" fill="#b35a2a"/>
+<polygon points="136,342 346,342 346,368 136,368" fill="#2e7a6b"/>
+<circle cx="398" cy="142" r="66" fill="#0f3f25"/>
 <circle cx="398" cy="142" r="50" fill="#e24b3f"/>
 </svg>
