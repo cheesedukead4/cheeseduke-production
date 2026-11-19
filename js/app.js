@@ -38,7 +38,7 @@
   const DEPT = Object.fromEntries(DEPTS.concat([HANDOVER]).map(d => [d.id, d]));
   const PERMS = DEPTS.map(d => ({ id: d.id, name: d.name + '發布' })).concat([{ id: 'production', name: '生產部處理' }]);
   const PRIO = { urgent: { name: '緊急', rank: 0 }, high: { name: '重要', rank: 1 }, normal: { name: '一般', rank: 2 } };
-  const STATUS = { new: '待確認', ack: '已確認', doing: '處理中', done: '已完成' };
+  const STATUS = { new: '待確認', ack: '已確認', doing: '處理中', done: '已完成', ext: '進行中' };   // ext：其他部門在夥伴交接看板的任務
   const ETYPE = { meeting: '會議', arrival: '到貨', production: '生產排程', promo: '檔期活動', audit: '稽核／檢查', off: '停工／休假', other: '其他' };
   const REPEAT = { none: '不重複', weekly: '每週', biweekly: '每兩週', monthly: '每月' };
   const REMIND_TIMED = [[-1, '不提醒'], [0, '開始時'], [10, '10 分鐘前'], [30, '30 分鐘前'], [60, '1 小時前'], [1440, '前一天同一時間']];
@@ -106,23 +106,26 @@
     return out;
   }
   function pbToNotice(t, s) {
+    // 依負責人的部門放進各部門欄；生產部以外的任務只顯示（ro），狀態照夥伴交接看板，由負責人自己在那邊勾完成
+    const dept = DEPT[t.dept] ? t.dept : 'handover', ro = dept !== 'handover';
+    if (ro) s = {};
     // 生產部按了完成／取消，但夥伴交接看板還沒收到（pushedAt 比較舊）→ 先照生產部的決定顯示，標「回報中」
     const decided = typeof s.want === 'boolean';
     const pending = decided && (Number(t.pushedAt) || 0) < (Number(s.wantAt) || 0);
     const done = pending ? s.want : !!t.done;
-    const status = done ? 'done' : (s.status && s.status !== 'done' ? s.status : (s.ackAt ? 'ack' : 'new'));
+    const status = done ? 'done' : ro ? 'ext' : (s.status && s.status !== 'done' ? s.status : (s.ackAt ? 'ack' : 'new'));
     const seen = Number(t.seenAt) || 0, content = String(t.content || '').trim();
     const title = t.title || content.split('\n')[0] || '（沒有內容）';
     // 夥伴交接看板的標題就是內容的第一行：說明只放第一行之後的部分，避免重複
     const body = content.startsWith(title) ? content.slice(title.length).trim() : content;
     return {
-      id: t.id, src: 'pb', dept: 'handover', type: '交辦任務', title,
+      id: t.id, src: 'pb', dept, type: ro ? '夥伴交接任務' : '交辦任務', title,
       body, items: '', qty: '',
       date: seen > 1 ? ymd(new Date(seen)) : '', due: t.dueDate || '', dueEnd: '', priority: 'normal', status, onCal: true,
       owner: t.partner || '', reply: s.reply || '', replyBy: s.replyBy, replyAt: s.replyAt,
       by: '夥伴交接看板', at: seen, ackBy: s.ackBy, ackAt: s.ackAt,
       doneBy: done ? (s.doneBy || t.partner) : '', doneAt: done ? (s.doneAt || Date.parse(t.completedAt) || seen) : 0,
-      pb: { partner: t.partner, taskId: t.taskId, platformDone: !!t.done, pending, want: s.want, feedback: t.feedback, proposerNote: t.proposerNote, attachments: Number(t.attachments) || 0, status: t.status, completedAt: t.completedAt }
+      pb: { ro, role: t.role || '', partner: t.partner, taskId: t.taskId, platformDone: !!t.done, pending, want: s.want, feedback: t.feedback, proposerNote: t.proposerNote, attachments: Number(t.attachments) || 0, status: t.status, completedAt: t.completedAt }
     };
   }
   const events = () => S.list('events');
@@ -431,7 +434,9 @@
       ['附件', n.pb.attachments ? `${n.pb.attachments} 張（請到夥伴交接看板查看）` : ''],
       ['夥伴交接看板', (n.pb.platformDone ? '已完成' : '未完成') + (n.pb.status ? `（${n.pb.status}）` : '')]
     ] : []).filter(r => r[1]);
-    const prod = canHandle() ? `
+    const prod = pb && n.pb.ro
+      ? `<div class="box"><p class="hint">這是「${esc(n.owner || '其他部門')}」在夥伴交接看板的任務，只顯示給生產部參考；完成要由負責人在夥伴交接看板勾選，這裡最慢 5 分鐘會跟著更新。</p></div>`
+      : canHandle() ? `
       <div class="box prod"><h3>生產部處理</h3>
         <div class="btn-row">
           ${n.status === 'new' ? '<button type="button" class="btn primary" data-act="n-status" data-v="ack">確認收到</button>' : ''}
@@ -810,20 +815,57 @@
     catch (e) { PBS.error = e.message; }
     PBS.loading = false; renderPb();
   }
+  // 夥伴交接看板的部門（role）→ 看板的哪一欄
+  const PB_TARGETS = [['', '不帶入'], ['handover', '交辦給生產部（可回報完成）'], ['purchase', '採購'], ['store', '門市'], ['warehouse', '倉管'], ['material', '物管'], ['channel', '通路'], ['meeting', '產銷會議']];
   function renderPb() {
     const box = $('#pbPanel'); if (!box) return;
     const d = PBS.data, last = (d && d.last) || {};
+    const partners = (last.partners || []).filter(p => p && typeof p === 'object');
+    const roles = [];
+    partners.forEach(p => {
+      let r = roles.find(x => x.role === p.role);
+      if (!r) { r = { role: p.role, dept: p.dept || '', names: [] }; roles.push(r); }
+      r.names.push(p.name);
+    });
     const rows = d ? [
       ['設定', d.configured ? '已設定網址與金鑰' : '尚未設定（雲端後端的指令碼屬性要有 PB_URL、PB_KEY）'],
       ['定時同步', d.scheduled ? '每 5 分鐘' : '尚未啟用（設定好後在 Apps Script 執行 setupPartnerBoard）'],
       ['上次同步', last.at ? `${stamp(last.at)}　${last.ok ? '成功' : '有問題'}，帶進 ${last.count || 0} 筆（未完成 ${last.open || 0} 筆）` : '還沒有同步過'],
-      ['算作生產部的夥伴', (last.partners || []).join('、') || (d.roles ? `夥伴名單 role 含「${d.roles.join('、')}」的人` : '')],
       ['問題', last.error || '']
     ].filter(r => r[1]) : [];
-    box.innerHTML = `<h2>夥伴交接看板串接 <small>指派給生產部夥伴的任務會自動帶進看板；生產部按完成會回報到夥伴交接看板並通知提案人</small></h2>
+    box.innerHTML = `<h2>夥伴交接看板串接 <small>依負責人的部門把任務帶進各部門欄；交辦給生產部的任務，生產部按完成會回報並通知提案人</small></h2>
       ${PBS.error ? `<p class="err">讀取串接狀態失敗：${esc(PBS.error)}</p>` : ''}
       ${PBS.loading && !d ? '<p class="hint">讀取中…</p>' : `<dl class="kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('')}</dl>`}
-      <div class="btn-row"><button type="button" class="btn sm" data-act="pb-refresh">重新整理狀態</button></div>`;
+      ${roles.length ? `<div class="field"><span>部門對應（夥伴交接看板的部門 → 生產部看板的哪一欄）</span>
+        <div class="tbl-wrap"><table class="tbl pbmap"><thead><tr><th>夥伴交接看板的部門</th><th>夥伴</th><th>放進看板的</th></tr></thead><tbody>
+        ${roles.map((r, i) => `<tr><td>${esc(r.role || '（沒有部門）')}</td><td>${esc(r.names.join('、'))}</td>
+          <td><select class="inp" data-pbrole="${i}">${PB_TARGETS.map(([v, t]) => `<option value="${v}" ${v === r.dept ? 'selected' : ''}>${t}</option>`).join('')}</select></td></tr>`).join('')}
+        </tbody></table></div>
+        <p class="hint">其他部門的任務只顯示給生產部參考，完成由負責人在夥伴交接看板勾選；只有「交辦給生產部」的任務能在這裡按完成並回報。</p></div>` : ''}
+      <div class="btn-row">
+        ${roles.length ? '<button type="button" class="btn sm primary" data-act="pb-savemap">儲存部門對應並立即同步</button>' : ''}
+        <button type="button" class="btn sm" data-act="pb-sync" ${d && d.configured ? '' : 'disabled'}>立即同步</button>
+        <button type="button" class="btn sm" data-act="pb-refresh">重新整理狀態</button>
+      </div>`;
+    box.dataset.roles = JSON.stringify(roles.map(r => r.role));
+  }
+  async function pbSyncNow(msg) {
+    PBS.loading = true;
+    try {
+      await S.syncNow().catch(() => {});        // 先把剛改的設定送上雲端，後端才讀得到
+      const j = await A.api('pbSync');
+      PBS.data = j.pb || PBS.data; PBS.error = '';
+      await S.syncNow().catch(() => {});        // 把同步結果拿回來
+      toast(msg || '已同步夥伴交接看板');
+    } catch (e) { toast('同步失敗：' + e.message, true); }
+    PBS.loading = false; renderPb();
+  }
+  function pbSaveMap() {
+    const box = $('#pbPanel'); if (!box) return;
+    const roles = JSON.parse(box.dataset.roles || '[]'), map = {};
+    $$('[data-pbrole]', box).forEach(s => { const r = roles[Number(s.dataset.pbrole)]; if (r != null) map[r] = s.value; });
+    saveSettings({ pbMap: map });
+    pbSyncNow('已儲存部門對應，各部門欄已更新');
   }
   function renderManageLive() { renderSync(); }
 
@@ -971,6 +1013,7 @@
       const update = n.id in seen.ids;
       seen.ids[n.id] = r;
       if (n.status === 'done') return;
+      if (n.src === 'pb' && n.pb.ro) return;   // 其他部門在夥伴交接看板的任務只顯示，不跳通知
       if ((update ? n.upByEmail : n.byEmail) === me) return;   // 自己發的不提醒自己
       const at = update ? (n.upAt || 0) : (n.at || 0);
       if (Date.now() - at > NEW_POPUP_HOURS * 3600000) return;
@@ -1346,7 +1389,7 @@
       </div>
     </article>`;
   }
-  const projDoneBtn = n => !canHandle() || n.status === 'done' ? '' : isArmed(n.id)
+  const projDoneBtn = n => !canHandle() || n.status === 'done' || (n.pb && n.pb.ro) ? '' : isArmed(n.id)
     ? `<button type="button" class="p-done armed" data-act="p-done" data-id="${esc(n.id)}">再按一次確認完成</button>`
     : `<button type="button" class="p-done" data-act="p-done" data-id="${esc(n.id)}">✓ 完成</button>`;
 
@@ -1496,6 +1539,8 @@
         break;
       }
       case 'pb-refresh': loadPb(); break;
+      case 'pb-sync': pbSyncNow(); break;
+      case 'pb-savemap': pbSaveMap(); break;
       case 'b-status': B.status = el.dataset.v; B.quick = ''; renderBoardBody(); break;
       case 'b-group': B.group = el.dataset.v; renderBoardBody(); break;
       case 'quick': B.quick = B.quick === el.dataset.k ? '' : el.dataset.k; renderBoardBody(); break;

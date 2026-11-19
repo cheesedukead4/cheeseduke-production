@@ -142,6 +142,9 @@ html.auth-locked .app{display:none}
 .pill.s-ack{background:var(--info-bg);color:var(--info-fg)}
 .pill.s-doing{background:var(--info-bg);color:var(--info-fg)}
 .pill.s-done{background:var(--ok-bg);color:var(--ok-fg)}
+.pill.s-ext{background:var(--neutral-bg);color:var(--neutral-fg);box-shadow:inset 0 0 0 1px var(--line)}
+.tbl.pbmap{min-width:520px}
+.tbl.pbmap select{height:34px}
 .dtag{display:inline-flex;align-items:center;gap:6px;font-weight:700;color:var(--dc);font-size:13px;white-space:nowrap}
 .dtag::before{content:"";width:9px;height:9px;border-radius:3px;background:var(--dc);flex:none}
 .due{font-family:var(--font-num);font-weight:600;font-size:15px;letter-spacing:.01em;white-space:nowrap;color:var(--muted)}
